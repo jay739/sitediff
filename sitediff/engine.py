@@ -80,6 +80,7 @@ class DiffResult:
     meta_changes: list[MetaChange] = field(default_factory=list)
     field_changes: list[FieldChange] = field(default_factory=list)
     altered: int = 0
+    accepted: int = 0
 
     @property
     def structured(self) -> bool:

@@ -159,6 +159,17 @@ def from_response(response: Response, capture: Capture, label: str,
     raise UnsupportedCaptureError(capture.value)
 
 
+def from_browser(url: str, label: str, options=None,
+                 meta: dict[str, str] | None = None) -> Payload:
+    """Render a URL in a real browser and capture the settled DOM."""
+    from .browser import render
+
+    html = render(url, options)
+    payload = Payload(Kind.TEXT, label, Capture.BROWSER, html=html,
+                      meta={**(meta or {}), "capture": "browser"})
+    return payload
+
+
 def _static_misuse(body: str, label: str) -> list[str]:
     """Catch the obvious mistake: JSON captured as text.
 

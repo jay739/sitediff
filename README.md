@@ -118,6 +118,81 @@ data beats text for a verification tool, because a field diff names the field
 that moved instead of handing back a hunk to interpret. Browser support is an
 optional extra, never a base dependency.
 
+## Running across many entities
+
+Comparing two pages is a spot check. A migration means comparing thousands, and
+that needs two things existing tools do not give you: a way to pair pages
+across sites that disagree about URLs, and a way to stop one intentional change
+from being reported once per entity.
+
+### Pairing
+
+Every other tool keys its comparison on URL, so two sites with different URL
+schemes produce two unrelated lists. sitediff pairs on an **entity key**
+instead.
+
+```toml
+[pair]
+left = "legacy"
+right = "rewrite"
+left_path = "/api/GetRecord?id={key}"
+right_path = "/records/{key}"
+workers = 4
+delay_ms = 200          # be polite to the far end
+
+[pair.discover]         # or list them outright with keys = ["1234", ...]
+source = "legacy"
+path = "/index?page={param}"
+params = ["01", "02", "03"]
+pattern = 'Record/(\d{4})/'
+```
+
+Keys are either listed or scraped from a listing endpoint. Scraping matters
+because a hash-routed or JavaScript-driven site often cannot be crawled at all
+while still exposing a perfectly ordinary index.
+
+```
+sitediff run -p my-profile --limit 10     # smoke test first
+sitediff run -p my-profile --html run.html
+sitediff runs                             # history
+```
+
+Results go to SQLite at `.sitediff/runs.db`. A few thousand rows needs no
+server, and local storage preserves the property the security posture rests on.
+
+### Accepted differences
+
+Some differences are intentional. Without a way to record that, a single
+reworded footer is reported on every entity and buries everything that matters:
+
+```
+clean  0   drift  12
+  4002  drift  ~1  alter footer: Example State Department of Education -> ESDE
+  4004  drift  ~1  alter footer: Example State Department of Education -> ESDE
+  ... twelve identical findings, three real bugs among them
+```
+
+Record the decision once:
+
+```
+sitediff accept legacy:/api/GetRecord?id=4002 rewrite:/records/4002 \
+  -p my-profile --reason "rewrite shortened the department name by design"
+```
+
+```
+clean  9   drift  3
+12 finding(s) suppressed as accepted
+  4003  drift  ~1  alter metrics.pctProficient: 42.1 -> (absent)
+  4007  drift  ~1  alter metrics.pctProficient: 44.9 -> (absent)
+  4009  drift  ~1  alter metrics.attendance: 91.8 -> 96.8
+```
+
+Fingerprints deliberately exclude the entity a finding came from, so accepting
+once suppresses it everywhere. The store lives at `.sitediff/accepted.toml`
+**in your own repository**: accepting a difference should be a reviewed change
+with an author and a date, not a click that disappears. `--dry-run` shows what
+would be recorded without writing.
+
 ## Noise cancellation
 
 Two captures of the *same* side will disagree wherever a page is
@@ -195,6 +270,27 @@ One named endpoint. Reference it on the command line as `name:/path`.
 | `name` | string | **required** | Reference used as `name:/path` |
 | `capture` | `static`, `hydration`, `json`, `browser` | `static` | How values are obtained. Run `sitediff probe` to find out which this site needs |
 | `hydration_marker` | string | `""` | Name a specific embedded payload (`__NEXT_DATA__`, `__NUXT__`) when a page carries several |
+
+### `[pair]`
+
+Required only for `sitediff run`. `sitediff compare` needs none of it.
+
+| Key | Type | Default | Purpose |
+|---|---|---|---|
+| `left` / `right` | string | **required** | Source names for the two sides |
+| `left_path` / `right_path` | string | **required** | URL templates, each containing `{key}` |
+| `keys` | list | `[]` | Entity keys, when you already know them |
+| `workers` | int | `4` | Parallel comparisons |
+| `delay_ms` | int | `0` | Pause before each comparison |
+
+### `[pair.discover]`
+
+| Key | Type | Default | Purpose |
+|---|---|---|---|
+| `source` | string | **required** | Source serving the listing |
+| `path` | string | **required** | Listing path, optionally containing `{param}` |
+| `pattern` | regex | **required** | Must have exactly one capture group, which is the entity key |
+| `params` | list | `[]` | Values substituted into `{param}`, one request each |
 | `base_url` | string | `""` | Scheme, host and optional port |
 | `connect_to` | string | `""` | Address to actually connect to, keeping the original `Host` header and TLS SNI. Reaches one region behind a geo-routed name, an origin behind a CDN, or a service by tunnel address |
 | `headers` | table | `{}` | Extra request headers, for example `Authorization` |

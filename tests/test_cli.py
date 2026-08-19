@@ -203,3 +203,58 @@ def test_baseline_reports_a_stable_capture(capsys):
                        "--baseline", LEGACY, LEGACY, "-q")
     assert code == EXIT_DRIFT
     assert "stable" in out.lower()
+
+
+# --- run, accept, runs -------------------------------------------------------
+
+def _pair_profile(tmp_path, left_json, right_json):
+    """Two file-backed sides is not enough for `run`, which needs sources, so
+    these exercise the argument handling and error paths around it."""
+    path = tmp_path / "p.toml"
+    path.write_text('[profile]\nname = "t"\n', encoding="utf-8")
+    return path
+
+
+def test_run_without_a_pair_section_explains_what_to_add(capsys, tmp_path):
+    profile = _pair_profile(tmp_path, None, None)
+    code, _, err = run(capsys, "run", "-p", str(profile))
+    assert code == EXIT_ERROR
+    assert "[pair]" in err
+    assert "sitediff compare" in err
+
+
+def test_runs_reports_nothing_recorded(capsys, tmp_path):
+    code, out, _ = run(capsys, "runs", "--db", str(tmp_path / "none.db"))
+    assert code == EXIT_CLEAN
+    assert "No runs recorded" in out
+
+
+def test_accept_dry_run_writes_nothing(capsys, tmp_path):
+    store = tmp_path / "acc.toml"
+    code, out, _ = run(capsys, "accept", LEGACY, OPTIMISED,
+                       "--accept-file", str(store), "--dry-run")
+    assert code == EXIT_CLEAN
+    assert "Dry run" in out
+    assert not store.exists()
+
+
+def test_accept_writes_the_store_then_suppresses_the_findings(capsys, tmp_path):
+    store = tmp_path / "acc.toml"
+    code, out, _ = run(capsys, "accept", LEGACY, OPTIMISED,
+                       "--accept-file", str(store), "--reason", "expected")
+    assert code == EXIT_CLEAN
+    assert store.is_file()
+    assert "expected" in store.read_text(encoding="utf-8")
+
+    code, out, _ = run(capsys, "compare", LEGACY, OPTIMISED,
+                       "--accept-file", str(store))
+    assert code == EXIT_CLEAN
+    assert "suppressed as accepted" in out
+
+
+def test_accept_is_idempotent(capsys, tmp_path):
+    store = tmp_path / "acc.toml"
+    run(capsys, "accept", LEGACY, OPTIMISED, "--accept-file", str(store))
+    code, out, _ = run(capsys, "accept", LEGACY, OPTIMISED, "--accept-file", str(store))
+    assert code == EXIT_CLEAN
+    assert "Nothing new to accept" in out

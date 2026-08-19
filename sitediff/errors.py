@@ -163,3 +163,7 @@ class MixedPayloadError(SiteDiffError):
             f"(json, hydration) or both text (static). Adjust 'capture' on one "
             f"of the sources so the two agree."
         )
+
+
+class PairingError(SiteDiffError):
+    """Entities could not be enumerated or paired across the two sides."""

@@ -339,3 +339,61 @@ def render_fields(result: DiffResult, console: Console) -> None:
     console.print()
     console.print(table)
     console.print()
+
+
+def render_run(report, console: Console, show: int = 25) -> None:
+    """Present a run across many entities: the verdict, then what moved."""
+    total = len(report.results)
+    body = Text()
+    body.append("profile   ", style="meta.key")
+    body.append(f"{report.profile}\n", style="meta.value")
+    body.append("entities  ", style="meta.key")
+    body.append(f"{total}", style="meta.value")
+    body.append(f"  in {report.seconds:.1f}s\n\n", style="meta.key")
+
+    body.append("clean  ", style="meta.key")
+    body.append(f"{report.clean}", style="status.clean")
+    body.append("   drift  ", style="meta.key")
+    body.append(f"{report.drift}", style="status.drift" if report.drift else "meta.value")
+    body.append("   failed  ", style="meta.key")
+    body.append(f"{report.failed}", style="diff.remove" if report.failed else "meta.value")
+    if report.accepted:
+        body.append(f"\n{report.accepted} finding(s) suppressed as accepted",
+                    style="meta.key")
+    if report.discovery_failures:
+        body.append(f"\n{len(report.discovery_failures)} discovery page(s) failed",
+                    style="diff.remove")
+    if report.run_id is not None:
+        body.append(f"\n\nrun #{report.run_id} stored in {report.db_path}",
+                    style="meta.key")
+
+    console.print(Panel(body, title="sitediff run", border_style="cyan", expand=False))
+
+    drifted = report.drifted
+    if not drifted:
+        console.print("\n  Every entity matched.\n", style="status.clean")
+        return
+
+    table = Table(show_lines=False, expand=True, padding=(0, 1), box=None)
+    table.add_column("entity", ratio=1, overflow="fold")
+    table.add_column("status", width=8)
+    table.add_column("+/-/~", width=12)
+    table.add_column("detail", ratio=4, overflow="fold")
+
+    for result in drifted[:show]:
+        style = "diff.remove" if result.status == "error" else "status.drift"
+        counts = ("" if result.status == "error"
+                  else f"+{result.added} -{result.removed} ~{result.altered}")
+        table.add_row(
+            Text(result.key, style=style),
+            Text(result.status, style=style),
+            Text(counts, style="meta.key"),
+            Text(result.detail[:400] or "-", style="dim"),
+        )
+
+    console.print()
+    console.print(table)
+    if len(drifted) > show:
+        console.print(f"\n  ... and {len(drifted) - show} more. "
+                      f"Full results in {report.db_path}", style="dim")
+    console.print()

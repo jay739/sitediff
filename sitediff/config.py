@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from .capture import Capture
 from .errors import InvalidProfileError, ProfileNotFoundError, SourceNotFoundError
+from .pair import PairPlan, parse_pair
 from .source import DEFAULT_MAX_REDIRECTS, DEFAULT_TIMEOUT, EgressPolicy, Source
 
 # Inside the package so the bundled templates ship with the wheel. Only generic
@@ -129,6 +130,10 @@ class Profile:
     normalize: list[Rule] = field(default_factory=list)
     context_lines: int = 3
     mode: Mode = Mode.VALUES
+
+    # Pairing and browser options, both optional
+    pair: PairPlan = field(default_factory=PairPlan)
+    browser: dict = field(default_factory=dict)
 
     # Acquisition and safety
     sources: dict[str, Source] = field(default_factory=dict)
@@ -262,7 +267,7 @@ def load_profile(source: str | Path | None) -> Profile:
     security = data.get("security", {})
 
     known_sections = {"profile", "extract", "compare", "normalize",
-                      "redact", "security", "source"}
+                      "redact", "security", "source", "pair", "browser"}
     unknown = set(data) - known_sections
     if unknown:
         raise InvalidProfileError(
@@ -381,6 +386,8 @@ def load_profile(source: str | Path | None) -> Profile:
         allow_hosts=_require_list_of_str(
             security.get("allow_hosts", []), path, "security.allow_hosts"),
         redact=parse_rules("redact"),
+        pair=parse_pair(data, path),
+        browser=data.get("browser", {}),
         compare_headers=_require_list_of_str(
             compare.get("headers", []), path, "compare.headers",
         ),

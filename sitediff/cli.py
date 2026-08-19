@@ -16,15 +16,17 @@ from urllib.parse import urlparse
 from rich.text import Text
 
 from . import __version__
+from .accept import AcceptStore, apply_accepted, fingerprints_of
 from .capture import Capture, Kind, from_html, from_response
 from .config import Profile, discover_profiles, load_profile, profile_search_path
 from .engine import Status, compare, compare_structured, noise_baseline
-from .errors import MixedPayloadError, SiteDiffError
+from .errors import MixedPayloadError, PairingError, SiteDiffError
 from .extract import Page, extract_html, read_html
 from .render import (
     make_console,
     render_fields,
     render_probe,
+    render_run,
     render_side_by_side,
     render_summary,
     render_unified,
@@ -62,6 +64,8 @@ def build_parser() -> argparse.ArgumentParser:
     cmp_p.add_argument("-q", "--quiet", action="store_true", help="summary only, no diff body")
     cmp_p.add_argument("--capture", choices=[c.value for c in Capture], default="",
                        help="override the capture strategy for both sides")
+    cmp_p.add_argument("--accept-file", metavar="PATH",
+                       help="accepted-difference store (default .sitediff/accepted.toml)")
 
     ex_p = sub.add_parser("extract", help="show the visible lines pulled from one page")
     ex_p.add_argument("page")
@@ -80,6 +84,31 @@ def build_parser() -> argparse.ArgumentParser:
     pr_p.add_argument("-p", "--profile")
     pr_p.add_argument("--suggest", action="store_true",
                       help="print a profile fragment you can paste and edit")
+
+    run_p = sub.add_parser(
+        "run", help="compare every paired entity and aggregate the outcome")
+    run_p.add_argument("-p", "--profile", required=True)
+    run_p.add_argument("--limit", type=int, default=0, metavar="N",
+                       help="stop after N entities, for a smoke test")
+    run_p.add_argument("--db", metavar="PATH", help="results database (default .sitediff/runs.db)")
+    run_p.add_argument("--accept-file", metavar="PATH")
+    run_p.add_argument("--html", metavar="PATH", help="write a run report")
+    run_p.add_argument("--show", type=int, default=25, help="rows of detail to print")
+    run_p.add_argument("--no-color", action="store_true")
+
+    acc_p = sub.add_parser(
+        "accept", help="record the current differences as intentional")
+    acc_p.add_argument("left")
+    acc_p.add_argument("right")
+    acc_p.add_argument("-p", "--profile")
+    acc_p.add_argument("--capture", choices=[c.value for c in Capture], default="")
+    acc_p.add_argument("--accept-file", metavar="PATH")
+    acc_p.add_argument("--reason", default="", help="why this difference is expected")
+    acc_p.add_argument("--dry-run", action="store_true",
+                       help="show what would be accepted, write nothing")
+
+    runs_p = sub.add_parser("runs", help="list recent runs")
+    runs_p.add_argument("--db", metavar="PATH")
 
     sub.add_parser("profiles", help="list the built-in profiles")
     src_p = sub.add_parser("sources", help="list sources and the egress allowlist")
@@ -174,6 +203,12 @@ def cmd_compare(args) -> int:
     else:
         result = compare(left, right, profile, noise=noise)
 
+    store = AcceptStore.load(args.accept_file)
+    if apply_accepted(result, store):
+        console.print(
+            f"  {result.accepted} finding(s) suppressed as accepted "
+            f"({store.path})", style="dim")
+
     render_summary(result, console)
     if not args.quiet:
         if left_payload.kind is Kind.DATA:
@@ -221,6 +256,101 @@ def cmd_fetch(args) -> int:
         console.print()
         for line in page.lines:
             console.print(f"  {line}", highlight=False)
+    console.print()
+    return EXIT_CLEAN
+
+
+def cmd_run(args) -> int:
+    from .run import execute
+
+    profile = load_profile(args.profile)
+    console = make_console(no_color=args.no_color)
+    plan = profile.pair
+    if not plan.configured:
+        raise PairingError(
+            f"Profile {profile.name!r} defines no [pair] section, so there is "
+            f"nothing to run across.\n"
+            f"Add [pair] with left, right, left_path and right_path, plus either "
+            f"'keys' or a [pair.discover] block. Use 'sitediff compare' for a "
+            f"single pair."
+        )
+
+    store = AcceptStore.load(args.accept_file)
+    report = execute(profile, plan, store, limit=args.limit, db_path=args.db)
+    render_run(report, console, show=args.show)
+
+    if args.html:
+        from .report import write_run_report
+        path = write_run_report(report, args.html, profile)
+        console.print(f"  Run report written to {path}", style="cyan")
+
+    return EXIT_DRIFT if (report.drift or report.failed) else EXIT_CLEAN
+
+
+def cmd_accept(args) -> int:
+    profile = load_profile(args.profile).with_overrides()
+    console = make_console()
+
+    left_payload = resolve_payload(args.left, profile, "left", args.capture)
+    right_payload = resolve_payload(args.right, profile, "right", args.capture)
+    if left_payload.kind is not right_payload.kind:
+        raise MixedPayloadError(left_payload.kind.value, right_payload.kind.value)
+
+    left = _as_page(left_payload, profile, "left", True)
+    right = _as_page(right_payload, profile, "right", True)
+
+    if left_payload.kind is Kind.DATA:
+        result = compare_structured(left, right, profile,
+                                    left_payload.data, right_payload.data)
+    else:
+        result = compare(left, right, profile)
+
+    store = AcceptStore.load(args.accept_file)
+    findings = fingerprints_of(result)
+    new = {fp: desc for fp, desc in findings.items() if fp not in store}
+
+    if not new:
+        console.print("\n  Nothing new to accept; every difference is already "
+                      "recorded.\n", style="status.clean")
+        return EXIT_CLEAN
+
+    console.print(f"\n  {len(new)} difference(s) to accept:\n", style="bold")
+    for fp, description in new.items():
+        console.print(Text(f"    {fp}  {description[:110]}", style="dim"))
+
+    if args.dry_run:
+        console.print("\n  Dry run, nothing written.\n", style="yellow")
+        return EXIT_CLEAN
+
+    for fp, description in new.items():
+        store.add(fp, description, args.reason)
+    path = store.save()
+    console.print(f"\n  Written to {path}\n"
+                  f"  Commit it: accepting a difference should be a reviewed "
+                  f"change with an author.\n", style="cyan")
+    return EXIT_CLEAN
+
+
+def cmd_runs(args) -> int:
+    from .run import recent_runs
+
+    console = make_console()
+    rows = recent_runs(args.db)
+    if not rows:
+        console.print("\n  No runs recorded yet.\n", style="yellow")
+        return EXIT_CLEAN
+
+    console.print("\n  Recent runs:\n", style="bold")
+    console.print(f"  {'#':>4}  {'when (UTC)':<19} {'profile':<20} "
+                  f"{'entities':>8} {'clean':>6} {'drift':>6} {'failed':>7}", style="dim")
+    for row in rows:
+        # Trim the timezone offset: every timestamp is stored in UTC, and the
+        # column header says so, so repeating it on each row only misaligns.
+        when = row["started_at"][:19].replace("T", " ")
+        console.print(
+            f"  {row['id']:>4}  {when:<19} {row['profile'][:20]:<20} "
+            f"{row['entities']:>8} {row['clean']:>6} {row['drift']:>6} {row['failed']:>7}"
+        )
     console.print()
     return EXIT_CLEAN
 
@@ -303,6 +433,7 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "compare": cmd_compare, "extract": cmd_extract, "profiles": cmd_profiles,
         "fetch": cmd_fetch, "sources": cmd_sources, "probe": cmd_probe,
+        "run": cmd_run, "accept": cmd_accept, "runs": cmd_runs,
     }
     try:
         return handlers[args.command](args)
