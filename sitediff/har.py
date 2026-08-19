@@ -197,7 +197,7 @@ def templatise(endpoint: Endpoint, placeholders: dict[str, str]) -> str:
         if decoded in placeholders:
             parts.append(f"{name}={{{placeholders[decoded]}}}")
         elif any(v in decoded for v in placeholders) and "/" in decoded:
-            # A route-shaped value such as 1/EMH/1/02/1234/0 carries several
+            # A route-shaped value such as 1/AB/1/07/1234/0 carries several
             # fields at once, so its segments are substituted individually.
             segments = [
                 "{" + placeholders[seg] + "}" if seg in placeholders else seg

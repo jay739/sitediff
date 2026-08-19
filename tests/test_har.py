@@ -66,13 +66,13 @@ def test_one_endpoint_called_twice_is_listed_once(tmp_path):
 
 def test_form_and_json_payloads_are_both_parsed(tmp_path):
     har = write(tmp_path, [
-        entry("https://a.example.com/f", method="POST", body="RECORD_ID=1234&LEA=02",
+        entry("https://a.example.com/f", method="POST", body="RECORD_ID=1234&REGION=07",
               response=NUMBERS),
         entry("https://a.example.com/j", method="POST", body='{"RECORD_ID":"1234"}',
               response=NUMBERS, post_mime="application/json"),
     ])
     by_path = {e.path: e for e in load(har).endpoints}
-    assert by_path["/f"].params == {"RECORD_ID": "1234", "LEA": "02"}
+    assert by_path["/f"].params == {"RECORD_ID": "1234", "REGION": "07"}
     assert by_path["/j"].params == {"RECORD_ID": "1234"}
 
 
@@ -136,34 +136,34 @@ def test_only_whole_parameter_values_are_replaced():
     """A county code of '02' also occurs inside other ids and totals, so a
     blind text replace would corrupt them silently."""
     from sitediff.har import templatise
-    body = "LEA=02&LEAID=00&RECORD_ID=1234&GRADE_KEY=1602&TOTAL=1234321"
-    out = templatise(make_endpoint(body), {"02": "lea", "1234": "key"})
-    assert "LEA={lea}" in out
-    assert "LEAID=00" in out
+    body = "REGION=07&REGION_ID=00&RECORD_ID=1234&GROUP_KEY=1607&TOTAL=1234321"
+    out = templatise(make_endpoint(body), {"07": "lea", "1234": "key"})
+    assert "REGION={lea}" in out
+    assert "REGION_ID=00" in out
     assert "RECORD_ID={key}" in out
-    assert "GRADE_KEY=1602" in out
+    assert "GROUP_KEY=1607" in out
     assert "TOTAL=1234321" in out
 
 
 def test_route_shaped_values_are_substituted_per_segment():
     from sitediff.har import templatise
-    body = "FILTERS=1%2FEMH%2F1%2F02%2F1234%2F0"
-    out = templatise(make_endpoint(body), {"02": "lea", "1234": "key"})
+    body = "FILTERS=1%2FAB%2F1%2F07%2F1234%2F0"
+    out = templatise(make_endpoint(body), {"07": "lea", "1234": "key"})
     assert "{lea}" in out and "{key}" in out
-    assert "EMH" in out
+    assert "AB" in out          # a non-identifying segment is left alone
 
 
 def test_json_payloads_are_templatised_by_field():
     from sitediff.har import templatise
-    body = '{"RECORD_ID": "1234", "LEA": "02", "GRADE_KEY": "16"}'
+    body = '{"RECORD_ID": "1234", "REGION": "07", "GROUP_KEY": "16"}'
     out = json.loads(templatise(make_endpoint(body, "application/json"),
-                                {"1234": "key", "02": "lea"}))
-    assert out == {"RECORD_ID": "{key}", "LEA": "{lea}", "GRADE_KEY": "16"}
+                                {"1234": "key", "07": "lea"}))
+    assert out == {"RECORD_ID": "{key}", "REGION": "{lea}", "GROUP_KEY": "16"}
 
 
 def test_no_placeholders_leaves_the_body_untouched():
     from sitediff.har import templatise
-    body = "LEA=02&RECORD_ID=1234"
+    body = "REGION=07&RECORD_ID=1234"
     assert templatise(make_endpoint(body), {}) == body
 
 

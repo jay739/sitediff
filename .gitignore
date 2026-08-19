@@ -26,3 +26,8 @@ BUILD_PLAN.md
 report-*.html
 !*.example.html
 docs/reports/
+
+# coverage artifacts
+.coverage
+.coverage.*
+htmlcov/

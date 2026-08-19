@@ -14,7 +14,7 @@ from sitediff.probe import Strategy, probe, suggested_profile
 KNOCKOUT = """<html><head>
 <script src="/Scripts/jquery-3.6.0.min.js"></script>
 <script src="/Scripts/knockout-3.5.1.js"></script>
-<script>$.getJSON("/api/Record/GetRecordData?id=1234",
+<script>$.getJSON("/api/Records/GetRecordData?id=1234",
   function(d){ ko.applyBindings(d); });</script>
 </head><body><div id="main">
 <h1 data-bind="text: schoolName">Loading... please wait</h1>

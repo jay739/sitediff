@@ -98,7 +98,7 @@ sitediff har capture.har --suggest
 
   data POST /Records/GetRecordView/
            206,996b   202 numbers  text/html  x2
-         payload (application/x-www-form-urlencoded): SEXCODE, RACECODE, LEA, RECORD_ID
+         payload (application/x-www-form-urlencoded): FIELD_A, FIELD_B, REGION, RECORD_ID
   data POST /Assessments/GetElaPerformanceBarChart
             16,252b    20 numbers  application/json  x1
 ```
