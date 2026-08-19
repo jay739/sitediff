@@ -21,16 +21,68 @@ import gzip
 import http.client
 import socket
 import ssl
+import threading
 import time
 import zlib
 from dataclasses import dataclass, field
 from urllib.parse import urlparse, urlunparse
 
-from .errors import EgressBlockedError, FetchError, TooManyRedirectsError
+from .errors import (
+    EgressBlockedError,
+    FetchError,
+    NetworkError,
+    TooManyRedirectsError,
+)
 
 DEFAULT_TIMEOUT = 30.0
+
+# Statuses that mean "you are going too fast", as opposed to "this is broken".
+THROTTLED = frozenset({429, 503})
+DEFAULT_MAX_RETRIES = 3
+MAX_BACKOFF_SECONDS = 60.0
 DEFAULT_MAX_REDIRECTS = 5
 MAX_BODY_BYTES = 64 * 1024 * 1024
+
+
+class RateLimiter:
+    """A ceiling on requests per second across every worker.
+
+    A per-worker sleep does not limit anything: with four workers a 250ms pause
+    still permits sixteen requests a second, which is four times what the
+    operator thought they configured. The limit has to be shared, so it lives
+    behind one lock.
+    """
+
+    def __init__(self, per_second: float = 0.0):
+        self.per_second = max(0.0, per_second)
+        self._lock = threading.Lock()
+        self._next_allowed = 0.0
+
+    def wait(self) -> None:
+        if not self.per_second:
+            return
+        interval = 1.0 / self.per_second
+        with self._lock:
+            now = time.monotonic()
+            start = max(now, self._next_allowed)
+            self._next_allowed = start + interval
+        delay = start - now
+        if delay > 0:
+            time.sleep(delay)
+
+
+class ThrottledError(NetworkError):
+    """The far end asked us to slow down, repeatedly."""
+
+    def __init__(self, url: str, status: int, attempts: int):
+        self.url = url
+        self.status = status
+        super().__init__(
+            f"{url} returned {status} on {attempts} consecutive attempts.\n"
+            f"The server is rate limiting this run. Lower [pair] rate_limit, "
+            f"reduce workers, and try again later; continuing at this rate "
+            f"risks the address being blocked outright."
+        )
 
 
 class EgressPolicy:
@@ -83,6 +135,7 @@ class Source:
     verify_tls: bool = True
     max_redirects: int = DEFAULT_MAX_REDIRECTS
     follow_redirects: bool = True
+    max_retries: int = DEFAULT_MAX_RETRIES
     # Str rather than the Capture enum, to keep this module free of imports
     # from the layers above it. config validates the value.
     capture: str = "static"
@@ -292,8 +345,39 @@ def _single_request(url: str, source: Source, policy: EgressPolicy, via: str,
     return status, reason, response_headers, raw_body, peer_ip, peer_cert
 
 
-def fetch(url: str, source: Source, policy: EgressPolicy, body: str = "") -> Response:
-    """Fetch a URL, following redirects with the egress policy applied to each hop."""
+def _retry_after(headers: dict[str, str], attempt: int) -> float:
+    """How long to wait, preferring what the server asked for.
+
+    Retry-After is the server telling us exactly how long to back off. Ignoring
+    it in favour of a guess is both ruder and less effective.
+    """
+    raw = headers.get("retry-after", "").strip()
+    if raw.isdigit():
+        return min(float(raw), MAX_BACKOFF_SECONDS)
+    return min(2.0 ** attempt, MAX_BACKOFF_SECONDS)
+
+
+def fetch(url: str, source: Source, policy: EgressPolicy, body: str = "",
+          limiter: RateLimiter | None = None) -> Response:
+    """Fetch a URL, following redirects with the egress policy applied to each hop.
+
+    Retries when the far end signals throttling, backing off as it asked. A
+    throttled response is not a failure to record and move past: continuing at
+    the same rate is what turns rate limiting into a block.
+    """
+    for attempt in range(source.max_retries + 1):
+        if limiter is not None:
+            limiter.wait()
+        response = _fetch_once(url, source, policy, body)
+        if response.status not in THROTTLED or attempt == source.max_retries:
+            if response.status in THROTTLED:
+                raise ThrottledError(url, response.status, attempt + 1)
+            return response
+        time.sleep(_retry_after(response.headers, attempt))
+    raise ThrottledError(url, 429, source.max_retries + 1)
+
+
+def _fetch_once(url: str, source: Source, policy: EgressPolicy, body: str = "") -> Response:
     started = time.monotonic()
     chain: list[str] = []
     current = url

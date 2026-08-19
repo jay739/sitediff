@@ -256,3 +256,99 @@ def test_withholding_is_case_insensitive():
     r = Response(url="u", final_url="u", status=200, reason="OK",
                  headers={"set-cookie": "s=1"}, body="")
     assert r.metadata(["Set-Cookie"])["header:set-cookie"] == "[withheld]"
+
+
+# --- rate limiting and throttling --------------------------------------------
+
+class ThrottleHandler(BaseHTTPRequestHandler):
+    """Returns 429 for the first N requests, then succeeds."""
+
+    fail_count: ClassVar[int] = 0
+    seen: ClassVar[int] = 0
+    retry_after: ClassVar[str] = ""
+
+    def do_GET(self):
+        type(self).seen += 1
+        if type(self).seen <= type(self).fail_count:
+            self.send_response(429)
+            if type(self).retry_after:
+                self.send_header("Retry-After", type(self).retry_after)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        body = b"<html><body><main>ok</main></body></html>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
+@pytest.fixture
+def throttler():
+    ThrottleHandler.seen = 0
+    ThrottleHandler.fail_count = 0
+    ThrottleHandler.retry_after = ""
+    srv = HTTPServer(("127.0.0.1", 0), ThrottleHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield srv.server_address
+    srv.shutdown()
+
+
+def test_a_throttled_response_is_retried_then_succeeds(throttler):
+    host, port = throttler
+    ThrottleHandler.fail_count = 2
+    r = fetch(f"http://{host}:{port}/", Source("s", max_retries=3), EgressPolicy([host]))
+    assert r.status == 200
+    assert ThrottleHandler.seen == 3
+
+
+def test_persistent_throttling_raises_rather_than_hammering(throttler):
+    """Recording a 429 and moving on keeps the same rate up, which is what turns
+    rate limiting into a block."""
+    from sitediff.source import ThrottledError
+    host, port = throttler
+    ThrottleHandler.fail_count = 99
+    with pytest.raises(ThrottledError) as exc:
+        fetch(f"http://{host}:{port}/", Source("s", max_retries=1), EgressPolicy([host]))
+    assert "rate limiting" in str(exc.value)
+    assert "risks the address being blocked" in str(exc.value)
+
+
+def test_retry_after_is_preferred_over_our_own_guess():
+    from sitediff.source import _retry_after
+    assert _retry_after({"retry-after": "7"}, attempt=0) == 7.0
+    assert _retry_after({}, attempt=3) == 8.0          # exponential fallback
+    assert _retry_after({"retry-after": "99999"}, attempt=0) == 60.0   # capped
+
+
+def test_the_limiter_caps_the_rate_across_threads():
+    """A per-worker sleep does not cap anything; the limit has to be shared."""
+    import time as _time
+
+    from sitediff.source import RateLimiter
+
+    limiter = RateLimiter(per_second=20)
+    started = _time.monotonic()
+    results = []
+    threads = [threading.Thread(target=lambda: (limiter.wait(), results.append(1)))
+               for _ in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    elapsed = _time.monotonic() - started
+    assert len(results) == 10
+    # 10 requests at 20/sec cannot complete faster than ~0.45s however many
+    # threads are waiting
+    assert elapsed >= 0.4, f"limiter did not throttle: {elapsed:.2f}s"
+
+
+def test_a_zero_limit_means_no_throttling():
+    from sitediff.source import RateLimiter
+    limiter = RateLimiter(0)
+    limiter.wait()
+    limiter.wait()

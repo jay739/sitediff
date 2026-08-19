@@ -184,6 +184,10 @@ class PairPlan:
     crawl: Crawl | None = None
     delay_ms: int = 0
     workers: int = 4
+    # Requests per second across ALL workers. This is the setting that actually
+    # governs load; delay_ms only staggers each worker and does not cap the
+    # aggregate rate.
+    rate_limit: float = 0.0
 
     def __post_init__(self) -> None:
         # Constructing a plan with the single-page shorthand must behave the
@@ -286,6 +290,7 @@ def parse_pair(data: dict, path: str) -> PairPlan:
         crawl=crawl,
         delay_ms=int(section.get("delay_ms", 0)),
         workers=max(1, int(section.get("workers", 4))),
+        rate_limit=max(0.0, float(section.get("rate_limit", 0.0))),
     )
 
 

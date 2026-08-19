@@ -72,7 +72,8 @@ Required only for `sitediff run`. `sitediff compare` needs none of it.
 | `left_body` / `right_body` | string | `""` | Request bodies for the single-page shorthand |
 | `keys` | list | `[]` | Entity keys, when you already know them |
 | `workers` | int | `4` | Parallel comparisons |
-| `delay_ms` | int | `0` | Pause before each comparison |
+| `rate_limit` | float | `0` (off) | **Requests per second across all workers.** This is the setting that governs load |
+| `delay_ms` | int | `0` | Pause inside each worker before a comparison. Staggers workers; does **not** cap the aggregate rate |
 
 ### `[[pair.page]]` (repeatable)
 
@@ -116,6 +117,7 @@ Alternative to `[pair.discover]`: find keys by crawling one side from a seed.
 | `verify_tls` | bool | `true` | Set false only for an endpoint expected to present an untrusted certificate |
 | `follow_redirects` | bool | `true` | Follow 3xx responses |
 | `max_redirects` | int | `5` | Hops before giving up |
+| `max_retries` | int | `3` | Retries when the server returns 429 or 503, backing off as its `Retry-After` asks |
 
 ### `[extract]`
 
@@ -228,3 +230,29 @@ records the resolved address, HTTP status, redirect chain, TLS issuer and
 expiry, and any headers you list, then diffs those alongside the content.
 Identical content served from a different upstream is reported as drift, which
 is the reverse proxy failure that every status check reports as green.
+
+
+## Not getting blocked
+
+`delay_ms` sleeps **inside each worker**, so it staggers them rather than
+limiting anything. With four workers a 250ms pause still allows sixteen
+comparisons a second, which is thirty-two requests a second: four times what
+the number suggests.
+
+Use `rate_limit` instead. It is enforced across every worker behind one lock,
+so the number means what it says:
+
+```toml
+[pair]
+workers = 4
+rate_limit = 2.0     # two requests per second in total, whatever workers is
+```
+
+For a public service you do not own, start at 1 or 2 and raise it only if you
+have a reason to. A run of 17,000 requests at 2/sec takes a couple of hours; at
+32/sec it takes nine minutes and may end with the address blocked.
+
+A `429` or `503` is retried, backing off by whatever `Retry-After` asks for, or
+exponentially up to a minute if the server does not say. If throttling persists
+the run **stops** rather than pressing on, because continuing at a rate the
+server is actively refusing is what turns rate limiting into a block.
