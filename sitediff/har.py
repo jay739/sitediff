@@ -14,7 +14,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote_plus, urlparse
 
 from .errors import InputError
 
@@ -163,6 +163,52 @@ def load(path: str | Path) -> HarReport:
     return report
 
 
+def templatise(endpoint: Endpoint, placeholders: dict[str, str]) -> str:
+    """Replace captured parameter values with template placeholders.
+
+    Substitution is done per parameter, not by text replacement: a county code
+    of "02" also occurs inside dates, ids and totals, and a blind replace would
+    corrupt them silently. Only a parameter whose whole value matches is
+    rewritten.
+    """
+    body = endpoint.body
+    if not body or not placeholders:
+        return body
+
+    if endpoint.mime and "json" in endpoint.mime:
+        try:
+            data = json.loads(body)
+        except ValueError:
+            return body
+        if not isinstance(data, dict):
+            return body
+        for key, value in list(data.items()):
+            if isinstance(value, str) and value in placeholders:
+                data[key] = "{" + placeholders[value] + "}"
+        return json.dumps(data)
+
+    parts = []
+    for pair in body.split("&"):
+        if "=" not in pair:
+            parts.append(pair)
+            continue
+        name, _, value = pair.partition("=")
+        decoded = unquote_plus(value)
+        if decoded in placeholders:
+            parts.append(f"{name}={{{placeholders[decoded]}}}")
+        elif any(v in decoded for v in placeholders) and "/" in decoded:
+            # A route-shaped value such as 1/EMH/1/02/1234/0 carries several
+            # fields at once, so its segments are substituted individually.
+            segments = [
+                "{" + placeholders[seg] + "}" if seg in placeholders else seg
+                for seg in decoded.split("/")
+            ]
+            parts.append(f"{name}={quote_plus('/'.join(segments), safe='{}/')}")
+        else:
+            parts.append(pair)
+    return "&".join(parts)
+
+
 def suggest_profile(report: HarReport, template_keys: dict[str, str] | None = None) -> str:
     """A profile fragment wiring up the endpoints that appear to carry data."""
     data = report.data_endpoints
@@ -187,9 +233,7 @@ def suggest_profile(report: HarReport, template_keys: dict[str, str] | None = No
     ]
     for endpoint in data[:8]:
         name = endpoint.path.strip("/").replace("/", "-").lower() or "page"
-        body = endpoint.body
-        for value, placeholder in replacements.items():
-            body = body.replace(value, placeholder)
+        body = templatise(endpoint, replacements)
         lines += [
             "[[pair.page]]",
             f'name = "{name}"',

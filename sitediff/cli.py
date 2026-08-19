@@ -21,7 +21,7 @@ from .accept import AcceptStore, apply_accepted, fingerprints_of
 from .capture import Capture, Kind, from_html, from_response
 from .config import Profile, discover_profiles, load_profile, profile_search_path
 from .engine import Status, compare, compare_structured, noise_baseline
-from .errors import MixedPayloadError, PairingError, SiteDiffError
+from .errors import InputError, MixedPayloadError, PairingError, SiteDiffError
 from .extract import Page, extract_html, read_html
 from .render import (
     make_console,
@@ -121,6 +121,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="list every endpoint, not only those carrying data")
     har_p.add_argument("--suggest", action="store_true",
                        help="print a profile fragment wiring up the data endpoints")
+    har_p.add_argument("--placeholder", action="append", default=[], metavar="VALUE=NAME",
+                       help="replace a captured parameter value with {NAME} in the "
+                            "suggested body, e.g. --placeholder 1234=key. Repeatable")
 
     sub.add_parser("profiles", help="list the built-in profiles")
     src_p = sub.add_parser("sources", help="list sources and the egress allowlist")
@@ -439,8 +442,16 @@ def cmd_har(args) -> int:
     console.print()
 
     if args.suggest:
+        placeholders = {}
+        for item in args.placeholder:
+            if "=" not in item:
+                raise InputError(
+                    f"--placeholder expects VALUE=NAME, got {item!r}. "
+                    f"For example: --placeholder 1234=key")
+            value, _, name = item.partition("=")
+            placeholders[value] = name
         console.print("  [bold]Suggested profile fragment[/]\n")
-        for line in suggest_profile(report).splitlines():
+        for line in suggest_profile(report, placeholders).splitlines():
             console.print(Text(f"    {line}", style="dim"))
         console.print()
     return EXIT_CLEAN
