@@ -387,3 +387,58 @@ def test_crawl_matching_nothing_is_actionable(crawlable):
     with pytest.raises(PairingError) as exc:
         crawl_keys(spec, crawl_sources(host, port), EgressPolicy([host]))
     assert "matched against the URL" in str(exc.value)
+
+
+# --- composite entity identity ----------------------------------------------
+
+def test_named_groups_capture_more_than_the_key():
+    """A school is addressed by county AND id, so one capture group is not
+    always enough to build the request."""
+    plan = parse_pair({"pair": {
+        "left": "a", "right": "b",
+        "left_path": "/api?lea={lea}&id={key}", "right_path": "/school/{key}",
+        "discover": {"source": "a", "path": "/l",
+                     "pattern": r"School/1/\w+/1/(?P<lea>\d+)/(?P<key>\d{4})/0"},
+    }}, "p.toml")
+    assert plan.discover.pattern.groupindex.keys() >= {"lea", "key"}
+
+
+def test_named_groups_must_include_key():
+    with pytest.raises(InvalidProfileError) as exc:
+        parse_pair({"pair": {
+            "left": "a", "right": "b", "left_path": "/{key}", "right_path": "/{key}",
+            "discover": {"source": "a", "path": "/l",
+                         "pattern": r"(?P<lea>\d+)/(?P<school>\d{4})"},
+        }}, "p.toml")
+    assert "'key'" in str(exc.value)
+
+
+def test_url_paths_expand_every_named_field():
+    plan = PairPlan(left="a", right="b", left_path="/api?lea={lea}&id={key}",
+                    right_path="/school/{key}", keys=("1234",))
+    left, right = plan.url_paths("1234", {"key": "1234", "lea": "02"})
+    assert left == "/api?lea=02&id=1234"
+    assert right == "/school/1234"
+
+
+def test_expand_leaves_unknown_braces_alone():
+    """Form bodies and URLs legitimately contain braces that are not
+    placeholders, so substitution must not be all-or-nothing."""
+    from sitediff.pair import expand
+    assert expand("a={key}&b={unknown}", {"key": "1"}) == "a=1&b={unknown}"
+
+
+def test_discovery_records_named_fields_per_key(profile):
+    """The real Example State listing carries county and school id in one link."""
+    import re as _re
+
+    from sitediff.pair import Discovery
+    plan = PairPlan(left="legacy", right="rewrite", left_path="/{key}",
+                    right_path="/{key}",
+                    discover=Discovery(
+                        source="legacy", path="/list",
+                        pattern=_re.compile(
+                            r"RecordDetail/1/\w/1/(?P<lea>\d+)/(?P<key>\d{4})/0")))
+    found = discover_keys(plan, profile.sources, profile.egress_policy())
+    assert sorted(found.keys) == sorted(SCHOOLS)
+    assert found.context(found.keys[0])["lea"] == "01"

@@ -21,7 +21,7 @@ from .config import Profile
 from .engine import Status, compare, compare_structured
 from .errors import CaptureError, MixedPayloadError, SiteDiffError
 from .extract import Page, extract_html
-from .pair import PairPlan, discover_keys
+from .pair import PairPlan, discover_keys, expand
 from .source import fetch
 
 DEFAULT_DB = Path(".sitediff") / "runs.db"
@@ -100,8 +100,9 @@ class RunReport:
 
 
 def _compare_one(key: str, plan: PairPlan, profile: Profile,
-                 store: AcceptStore) -> EntityResult:
-    left_path, right_path = plan.url_paths(key)
+                 store: AcceptStore, context: dict[str, str] | None = None) -> EntityResult:
+    values = context or {"key": key}
+    left_path, right_path = plan.url_paths(key, values)
     policy = profile.egress_policy()
     sides = []
 
@@ -111,7 +112,7 @@ def _compare_one(key: str, plan: PairPlan, profile: Profile,
         url = source.url_for(path)
         # The key is templated into the body too, so POST endpoints that take
         # the entity id in a payload rather than a query string still pair.
-        body = source.body.replace("{key}", key) if source.body else ""
+        body = expand(source.body, values) if source.body else ""
         response = fetch(url, source, policy, body=body)
         # A non-2xx is not a comparable page. Left unchecked, two 404 bodies
         # compare equal and an entity that exists on neither side is reported
@@ -185,7 +186,7 @@ def execute(profile: Profile, plan: PairPlan, store: AcceptStore,
         if plan.delay_ms:
             time.sleep(plan.delay_ms / 1000)
         try:
-            return _compare_one(key, plan, profile, store)
+            return _compare_one(key, plan, profile, store, discovered.context(key))
         except SiteDiffError as exc:
             return EntityResult(key=key, status="error",
                                 detail=str(exc).splitlines()[0])

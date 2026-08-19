@@ -155,6 +155,28 @@ Keys come from one of three places, in order of preference:
 site cannot be crawled at all (hash routing, JavaScript navigation) while still
 exposing a perfectly ordinary index.
 
+### Entities identified by more than one value
+
+An entity is not always addressed by a single id. A Example State school needs both a
+county and a school id, and both have to reach the URL and the request body. Use
+named groups, one of which must be `key`:
+
+```toml
+[pair]
+left_path = "/api?lea={lea}&id={key}"
+right_path = "/school/{key}"
+
+[pair.discover]
+source = "legacy"
+path = "/Directory/Index?l={param}"
+params = ["01", "02", "30"]
+pattern = 'RecordDetail/1/\w+/1/(?P<lea>\d+)/(?P<key>\d{4})/0'
+```
+
+`key` is the identity used for reporting and for the accepted-difference store.
+Every other named group is available as a placeholder in `left_path`,
+`right_path` and a source's `body`.
+
 **`[pair.crawl]`** points at one apex domain and follows links from there:
 
 ```toml
@@ -313,7 +335,7 @@ Alternative to `[pair.discover]`: find keys by crawling one side from a seed.
 | Key | Type | Default | Purpose |
 |---|---|---|---|
 | `source` | string | **required** | Which side to crawl. Pick the one with real URLs |
-| `key_pattern` | regex | **required** | Matched against each URL. Exactly one capture group, the entity key |
+| `key_pattern` | regex | **required** | Matched against each URL. One capture group, or named groups including `(?P<key>...)` |
 | `seeds` | list | `["/"]` | Paths to start from |
 | `follow` | regex | `""` | Only follow links whose path matches |
 | `max_pages` | int | `500` | Ceiling on pages fetched |
@@ -326,7 +348,7 @@ Alternative to `[pair.discover]`: find keys by crawling one side from a seed.
 |---|---|---|---|
 | `source` | string | **required** | Source serving the listing |
 | `path` | string | **required** | Listing path, optionally containing `{param}` |
-| `pattern` | regex | **required** | Must have exactly one capture group, which is the entity key |
+| `pattern` | regex | **required** | One capture group (the entity key), or named groups including `(?P<key>...)` |
 | `params` | list | `[]` | Values substituted into `{param}`, one request each |
 | `base_url` | string | `""` | Scheme, host and optional port |
 | `connect_to` | string | `""` | Address to actually connect to, keeping the original `Host` header and TLS SNI. Reaches one region behind a geo-routed name, an origin behind a CDN, or a service by tunnel address |

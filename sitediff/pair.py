@@ -23,6 +23,52 @@ from .source import EgressPolicy, Source, fetch
 MAX_KEYS = 100_000
 
 
+def expand(template: str, values: dict[str, str]) -> str:
+    """Substitute {name} placeholders, leaving unknown ones untouched.
+
+    str.format would raise on any brace the profile did not intend as a
+    placeholder, which is unhelpful in URLs and form bodies that legitimately
+    contain them.
+    """
+    out = template
+    for name, value in values.items():
+        out = out.replace("{" + name + "}", value)
+    return out
+
+
+def _validate_key_pattern(compiled: re.Pattern, path: str, label: str) -> None:
+    """A pattern identifies an entity either by one group or by named groups.
+
+    Named groups exist because an entity is not always addressed by a single
+    value. One of them must be called 'key', which is the identity used for
+    reporting and for the accepted-difference store.
+    """
+    named = set(compiled.groupindex)
+    if named:
+        if "key" not in named:
+            raise InvalidProfileError(
+                path,
+                f"{label} uses named groups {sorted(named)} but none is called "
+                f"'key'. Name the entity's identity (?P<key>...); any other "
+                f"named group is available as a template placeholder.",
+            )
+        return
+    if compiled.groups != 1:
+        raise InvalidProfileError(
+            path,
+            f"{label} must have exactly one capture group, which is the entity "
+            f"key, or named groups including (?P<key>...); this one has "
+            f"{compiled.groups}",
+        )
+
+
+def _captures(match: re.Match) -> tuple[str, dict[str, str]]:
+    named = match.groupdict()
+    if named:
+        return named["key"], {k: v or "" for k, v in named.items() if k != "key"}
+    return match.group(1), {}
+
+
 def _compile_one(pattern: str, path: str, label: str) -> re.Pattern:
     try:
         return re.compile(pattern)
@@ -59,13 +105,14 @@ class PairPlan:
     def configured(self) -> bool:
         return bool(self.left and self.right)
 
-    def url_paths(self, key: str) -> tuple[str, str]:
+    def url_paths(self, key: str, context: dict[str, str] | None = None) -> tuple[str, str]:
         if "{key}" not in self.left_path or "{key}" not in self.right_path:
             raise PairingError(
                 "left_path and right_path must each contain '{key}', which is "
                 "substituted with the entity key for every pair."
             )
-        return self.left_path.replace("{key}", key), self.right_path.replace("{key}", key)
+        values = context or {"key": key}
+        return expand(self.left_path, values), expand(self.right_path, values)
 
 
 def parse_pair(data: dict, path: str) -> PairPlan:
@@ -95,12 +142,7 @@ def parse_pair(data: dict, path: str) -> PairPlan:
         except re.error as exc:
             raise InvalidProfileError(
                 path, f"[pair.discover] pattern is not a valid regex: {exc}") from exc
-        if compiled.groups != 1:
-            raise InvalidProfileError(
-                path,
-                f"[pair.discover] pattern must have exactly one capture group, "
-                f"which is the entity key; this one has {compiled.groups}",
-            )
+        _validate_key_pattern(compiled, path, "[pair.discover] pattern")
         discovery = Discovery(
             source=raw["source"], path=raw["path"], pattern=compiled,
             params=tuple(raw.get("params", [])),
@@ -113,12 +155,7 @@ def parse_pair(data: dict, path: str) -> PairPlan:
             if required not in raw_crawl:
                 raise InvalidProfileError(path, f"[pair.crawl] needs {required!r}")
         compiled = _compile_one(raw_crawl["key_pattern"], path, "[pair.crawl] key_pattern")
-        if compiled.groups != 1:
-            raise InvalidProfileError(
-                path,
-                f"[pair.crawl] key_pattern must have exactly one capture group, "
-                f"which is the entity key; this one has {compiled.groups}",
-            )
+        _validate_key_pattern(compiled, path, "[pair.crawl] key_pattern")
         follow = (_compile_one(raw_crawl["follow"], path, "[pair.crawl] follow")
                   if raw_crawl.get("follow") else None)
         crawl = Crawl(
@@ -153,6 +190,13 @@ class DiscoveryResult:
     keys: list[str] = field(default_factory=list)
     fetched: int = 0
     failures: list[tuple[str, str]] = field(default_factory=list)
+    # Extra named captures per key. An entity is not always identified by a
+    # single value: a school is addressed by county AND school id, and both
+    # have to reach the URL and the request body.
+    fields: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    def context(self, key: str) -> dict[str, str]:
+        return {"key": key, **self.fields.get(key, {})}
 
 
 def discover_keys(plan: PairPlan, sources: dict[str, Source],
@@ -182,10 +226,12 @@ def discover_keys(plan: PairPlan, sources: dict[str, Source],
             continue
         result.fetched += 1
         for match in spec.pattern.finditer(response.body):
-            key = match.group(1)
+            key, extra = _captures(match)
             if key not in seen:
                 seen.add(key)
                 result.keys.append(key)
+                if extra:
+                    result.fields[key] = extra
                 if len(result.keys) >= MAX_KEYS:
                     return result
 
@@ -279,10 +325,12 @@ def crawl_keys(spec: Crawl, sources: dict[str, Source],
         result.fetched += 1
 
         for match in spec.key_pattern.finditer(url):
-            key = match.group(1)
+            key, extra = _captures(match)
             if key not in seen_keys:
                 seen_keys.add(key)
                 result.keys.append(key)
+                if extra:
+                    result.fields[key] = extra
 
         for href in _HREF.findall(response.body):
             target = urljoin(url, href.strip())
