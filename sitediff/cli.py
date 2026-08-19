@@ -158,8 +158,9 @@ def fetch_url(url: str, profile: Profile):
 
 def _as_page(payload, profile: Profile, side: str, allow_unrendered: bool) -> Page:
     if payload.kind is Kind.TEXT:
-        return extract_html(payload.html, profile, side=side, label=payload.label,
-                            allow_unrendered=allow_unrendered, meta=payload.meta)
+        return extract_html(payload.html, profile.for_side(side), side=side,
+                            label=payload.label, allow_unrendered=allow_unrendered,
+                            meta=payload.meta)
     # Structured payloads carry no lines; the Page exists to hold identity and
     # response metadata so both comparison paths report them the same way.
     return Page(path=payload.label, side=side, lines=[], meta=payload.meta)

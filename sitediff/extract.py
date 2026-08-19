@@ -155,6 +155,26 @@ def _walk(root: Tag, block_tags: set[str]) -> list[str]:
     return lines
 
 
+def _outermost(tags: list[Tag]) -> list[Tag]:
+    """Drop any tag contained in another, preserving order.
+
+    Selectors written for two different codebases are given as one union, so on
+    a given page several of them can match nested elements. Without this the
+    inner match is walked twice and its text is duplicated, which inflates the
+    line count and produces a diff against content that only appears once.
+    """
+    kept: list[Tag] = []
+    seen: set[int] = set()
+    for tag in tags:
+        if id(tag) in seen:
+            continue
+        seen.add(id(tag))
+        if any(parent is other for other in tags for parent in tag.parents):
+            continue
+        kept.append(tag)
+    return kept
+
+
 def extract(
     path: str | Path,
     profile: Profile,
@@ -191,9 +211,10 @@ def extract_html(
     block_tags = set(profile.block_tags)
 
     if profile.include_selectors:
-        roots = []
+        matched = []
         for selector in profile.include_selectors:
-            roots.extend(t for t in soup.select(selector) if not t.decomposed)
+            matched.extend(t for t in soup.select(selector) if not t.decomposed)
+        roots = _outermost(matched)
     else:
         roots = [soup.body or soup]
 

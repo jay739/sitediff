@@ -132,8 +132,8 @@ def _compare_one(key: str, plan: PairPlan, profile: Profile,
 
     def as_page(payload, side, url):
         if payload.kind is Kind.TEXT:
-            return extract_html(payload.html, profile, side=side, label=url,
-                                meta=payload.meta)
+            return extract_html(payload.html, profile.for_side(side), side=side,
+                                label=url, meta=payload.meta)
         return Page(path=url, side=side, lines=[], meta=payload.meta)
 
     left = as_page(left_payload, "left", left_url)

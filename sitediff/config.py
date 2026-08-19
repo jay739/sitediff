@@ -129,6 +129,10 @@ class Profile:
     ignore_patterns: list[re.Pattern] = field(default_factory=list)
     normalize: list[Rule] = field(default_factory=list)
     context_lines: int = 3
+    # Two codebases routinely differ in letter case where CSS text-transform
+    # makes them render identically, which is a difference in the markup but
+    # not one a reader could ever see.
+    ignore_case: bool = False
     mode: Mode = Mode.VALUES
 
     # Pairing and browser options, both optional
@@ -140,6 +144,11 @@ class Profile:
     allow_hosts: list[str] = field(default_factory=list)
     redact: list[Rule] = field(default_factory=list)
     compare_headers: list[str] = field(default_factory=list)
+
+    # Per-side extraction overrides. The two sides are different codebases by
+    # definition, so expecting one set of selectors to fit both defeats the
+    # purpose. [extract.left] and [extract.right] override the shared block.
+    side_overrides: dict = field(default_factory=dict)
 
     def egress_policy(self) -> EgressPolicy:
         """Hosts this profile may contact.
@@ -156,6 +165,15 @@ class Profile:
             if source.connect_to:
                 hosts.append(source.connect_to)
         return EgressPolicy(sorted(set(hosts)))
+
+    def for_side(self, side: str) -> Profile:
+        """This profile as it applies to one side of a comparison."""
+        override = self.side_overrides.get(side)
+        if not override:
+            return self
+        allowed = {"include_selectors", "exclude_selectors", "render_sentinels",
+                   "hidden_classes", "hidden_styles", "parser"}
+        return replace(self, **{k: v for k, v in override.items() if k in allowed})
 
     def source(self, name: str) -> Source:
         try:
@@ -180,7 +198,7 @@ EXTRACT_KEYS = {
     "respect_aria_hidden", "include_selectors", "exclude_selectors", "parser",
     "render_sentinels",
 }
-COMPARE_KEYS = {"mode", "context_lines", "ignore_patterns", "headers"}
+COMPARE_KEYS = {"mode", "context_lines", "ignore_patterns", "headers", "ignore_case"}
 SECURITY_KEYS = {"allow_hosts"}
 SOURCE_KEYS = {
     "name", "base_url", "connect_to", "headers", "timeout", "verify_tls",
@@ -336,7 +354,14 @@ def load_profile(source: str | Path | None) -> Profile:
         ) from None
 
     _reject_unknown(data.get("profile", {}), PROFILE_KEYS, path, "[profile]")
-    _reject_unknown(extract, EXTRACT_KEYS, path, "[extract]")
+    side_overrides = {}
+    for side in ("left", "right"):
+        raw_side = extract.get(side)
+        if raw_side is not None:
+            _reject_unknown(raw_side, EXTRACT_KEYS, path, f"[extract.{side}]")
+            side_overrides[side] = raw_side
+    _reject_unknown({k: v for k, v in extract.items() if k not in ("left", "right")},
+                    EXTRACT_KEYS, path, "[extract]")
     _reject_unknown(compare, COMPARE_KEYS, path, "[compare]")
     _reject_unknown(security, SECURITY_KEYS, path, "[security]")
 
@@ -384,11 +409,13 @@ def load_profile(source: str | Path | None) -> Profile:
         ),
         normalize=rules,
         context_lines=compare.get("context_lines", defaults.context_lines),
+        ignore_case=compare.get("ignore_case", defaults.ignore_case),
         mode=mode,
         sources=sources,
         allow_hosts=_require_list_of_str(
             security.get("allow_hosts", []), path, "security.allow_hosts"),
         redact=parse_rules("redact"),
+        side_overrides=side_overrides,
         pair=parse_pair(data, path),
         browser=data.get("browser", {}),
         compare_headers=_require_list_of_str(

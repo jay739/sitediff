@@ -305,7 +305,7 @@ Required only for `sitediff run`. `sitediff compare` needs none of it.
 
 | Key | Type | Default | Purpose |
 |---|---|---|---|
-| `include_selectors` | list | `[]` | CSS selectors to compare. Empty means the whole `<body>` |
+| `include_selectors` | list | `[]` | CSS selectors to compare. Empty means the whole `<body>`. Nested matches are de-duplicated, so only the outermost is walked |
 | `exclude_selectors` | list | `[]` | CSS selectors removed before comparison, such as `nav` or `footer` |
 | `render_sentinels` | list | `[]` | Strings meaning the page was captured before rendering finished. A match aborts the run, since diffing a half-rendered page reports every value as missing |
 | `hidden_classes` | list | `hidden`, `hide`, `d-none`, `sr-only`, `visually-hidden`, `screen-reader-only` | Class names that hide content via CSS |
@@ -315,12 +315,28 @@ Required only for `sitediff run`. `sitediff compare` needs none of it.
 | `block_tags` | list | the block-level HTML tags | Tags that start a new comparison line. Inline tags such as `span` and `a` are deliberately excluded: treating them as blocks splits one sentence across several lines and separates every value from its label |
 | `parser` | string | `lxml` | BeautifulSoup parser. Falls back to `html.parser` if unavailable |
 
+### `[extract.left]` and `[extract.right]`
+
+The two sides are different codebases, so one set of selectors rarely fits both.
+These sub-tables override the shared `[extract]` block for one side only, and
+accept `include_selectors`, `exclude_selectors`, `render_sentinels`,
+`hidden_classes`, `hidden_styles` and `parser`.
+
+```toml
+[extract.left]
+include_selectors = ["#GraphContent"]
+
+[extract.right]
+include_selectors = ["#main"]
+```
+
 ### `[compare]`
 
 | Key | Type | Default | Purpose |
 |---|---|---|---|
 | `mode` | `values` or `shape` | `values` | `values` when both sides read the same data and any disagreement is a defect. `shape` when they hold different data by design, which masks values and compares labels and structure |
 | `context_lines` | int | `3` | Unchanged lines shown around each change |
+| `ignore_case` | bool | `false` | Fold letter case before comparing. Two codebases routinely differ in case where CSS `text-transform` renders them identically |
 | `ignore_patterns` | list of regex | `[]` | Lines never reported. Use for intentional differences, otherwise one deliberate change is reported on every page and buries the real findings |
 | `headers` | list | `[]` | Response headers compared alongside content, for example `server` |
 

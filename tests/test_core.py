@@ -286,3 +286,36 @@ def test_every_documented_key_is_accepted():
     known = PROFILE_KEYS | EXTRACT_KEYS | COMPARE_KEYS | SECURITY_KEYS | SOURCE_KEYS | RULE_KEYS
     missing = known - documented
     assert not missing, f"undocumented config keys: {sorted(missing)}"
+
+
+def test_nested_include_selectors_do_not_duplicate_content(tmp_path):
+    """Selectors for two codebases are given as one union, so several can match
+    nested elements on one page. The inner match must not be walked twice."""
+    html = """<html><body><main id="main"><p>outer</p>
+              <div id="inner"><p>value</p></div></main></body></html>"""
+    profile = Profile(include_selectors=["#main", "#inner"])
+    assert lines_of(tmp_path, html, profile) == ["outer", "value"]
+
+
+def test_sibling_include_selectors_are_both_kept(tmp_path):
+    html = """<html><body><div id="a"><p>one</p></div>
+              <div id="b"><p>two</p></div></body></html>"""
+    profile = Profile(include_selectors=["#a", "#b"])
+    assert lines_of(tmp_path, html, profile) == ["one", "two"]
+
+
+def test_ignore_case_folds_markup_only_differences():
+    """CSS text-transform makes these render identically, so a case-only
+    difference is in the markup but not in anything a reader can see."""
+    import re as _re
+    left = Page("l", "left", ["INDICATOR", "Earned Points"])
+    right = Page("r", "right", ["Indicator", "Earned Points"])
+    assert compare(left, right, Profile()).status is Status.DRIFT
+    assert compare(left, right, Profile(ignore_case=True)).status is Status.CLEAN
+    assert _re  # keep the import used
+
+
+def test_ignore_case_does_not_hide_real_text_changes():
+    left = Page("l", "left", ["Earned Points"])
+    right = Page("r", "right", ["Possible Points"])
+    assert compare(left, right, Profile(ignore_case=True)).status is Status.DRIFT

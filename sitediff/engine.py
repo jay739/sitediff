@@ -274,6 +274,10 @@ def compare(
         left_lines = [shape_of(ln) for ln in left_lines]
         right_lines = [shape_of(ln) for ln in right_lines]
 
+    if profile.ignore_case:
+        left_lines = [ln.casefold() for ln in left_lines]
+        right_lines = [ln.casefold() for ln in right_lines]
+
     matcher = difflib.SequenceMatcher(None, left_lines, right_lines, autojunk=False)
     result = DiffResult(
         left=left,
@@ -384,7 +388,7 @@ def compare_structured(
             changes.append(FieldChange(path, Op.REMOVE, a, ""))
         elif in_right and not in_left:
             changes.append(FieldChange(path, Op.ADD, "", b))
-        elif shape or a == b:
+        elif shape or a == b or (profile.ignore_case and a.casefold() == b.casefold()):
             # In shape mode the sides hold different data on purpose, so a field
             # present on both is agreement regardless of its value.
             same += 1
