@@ -176,3 +176,49 @@ def test_report_escapes_page_content():
     out = build_html_report(result, Profile())
     assert "<script>alert(1)</script>" not in out
     assert "&lt;script&gt;" in out
+
+
+# --- report assets -----------------------------------------------------------
+
+def test_report_inlines_its_templates():
+    """The stylesheet and script are separate files for editing, but a report
+    must remain one file that opens on a machine with no network."""
+    result = compare_structured(page(), page("right"), Profile(), {"a": 1}, {"a": 2})
+    out = build_html_report(result, Profile())
+    assert "<style>" in out and "<script>" in out
+    assert 'src="http' not in out and 'href="http' not in out
+    assert "--add-bg" in out          # from report.css
+    assert "sitediff-theme" in out    # from report.js
+
+
+def test_report_templates_ship_with_the_package():
+    import sitediff
+    templates = pathlib.Path(sitediff.__file__).parent / "templates"
+    for name in ("report.css", "report.js"):
+        assert (templates / name).is_file(), name
+
+
+def test_report_marks_every_row_for_filtering():
+    """The filter and search UI works off data-op, so every row needs one."""
+    result = compare_structured(page(), page("right"), Profile(),
+                                {"a": 1, "b": 2}, {"a": 9, "c": 3})
+    out = build_html_report(result, Profile())
+    assert out.count('data-op="alter"') == 1
+    assert out.count('data-op="remove"') == 1
+    assert out.count('data-op="add"') == 1
+
+
+def test_report_honours_reduced_motion():
+    result = compare_structured(page(), page("right"), Profile(), {"a": 1}, {"a": 2})
+    assert "prefers-reduced-motion" in build_html_report(result, Profile())
+
+
+def test_run_report_renders_a_sortable_table():
+    from sitediff.report import build_run_report
+    from sitediff.run import EntityResult, RunReport
+    report = RunReport(profile="t", seconds=1.0)
+    report.results = [EntityResult("4001", "clean"),
+                      EntityResult("4002", "drift", altered=1, detail="x")]
+    out = build_run_report(report, Profile())
+    assert "data-sortable" in out
+    assert "4002" in out

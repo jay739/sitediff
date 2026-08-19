@@ -147,9 +147,32 @@ params = ["01", "02", "03"]
 pattern = 'Record/(\d{4})/'
 ```
 
-Keys are either listed or scraped from a listing endpoint. Scraping matters
-because a hash-routed or JavaScript-driven site often cannot be crawled at all
-while still exposing a perfectly ordinary index.
+Keys come from one of three places, in order of preference:
+
+**`keys`** when you already know them.
+
+**`[pair.discover]`** scrapes them from a listing endpoint. This matters when a
+site cannot be crawled at all (hash routing, JavaScript navigation) while still
+exposing a perfectly ordinary index.
+
+**`[pair.crawl]`** points at one apex domain and follows links from there:
+
+```toml
+[pair.crawl]
+source = "rewrite"                  # crawl whichever side has real URLs
+seeds = ["/"]
+key_pattern = '/school/(\d{4})'      # matched against the URL, one capture group
+follow = '^/(school|district)'      # optional: restrict which links to follow
+max_pages = 500
+delay_ms = 200
+respect_robots = true
+```
+
+Crawl the side that is crawlable and derive the other side's URLs from the key.
+That asymmetry is the normal case: a rewrite is usually server-rendered with
+real paths while the legacy app is hash-routed and exposes no crawlable URLs at
+all. The crawl stays on the seed's origin regardless of the allowlist, and
+honours `robots.txt` unless told otherwise.
 
 ```
 sitediff run -p my-profile --limit 10     # smoke test first
@@ -283,6 +306,20 @@ Required only for `sitediff run`. `sitediff compare` needs none of it.
 | `workers` | int | `4` | Parallel comparisons |
 | `delay_ms` | int | `0` | Pause before each comparison |
 
+### `[pair.crawl]`
+
+Alternative to `[pair.discover]`: find keys by crawling one side from a seed.
+
+| Key | Type | Default | Purpose |
+|---|---|---|---|
+| `source` | string | **required** | Which side to crawl. Pick the one with real URLs |
+| `key_pattern` | regex | **required** | Matched against each URL. Exactly one capture group, the entity key |
+| `seeds` | list | `["/"]` | Paths to start from |
+| `follow` | regex | `""` | Only follow links whose path matches |
+| `max_pages` | int | `500` | Ceiling on pages fetched |
+| `delay_ms` | int | `200` | Pause between fetches |
+| `respect_robots` | bool | `true` | Honour the origin's `robots.txt` |
+
 ### `[pair.discover]`
 
 | Key | Type | Default | Purpose |
@@ -412,6 +449,27 @@ records the resolved address, HTTP status, redirect chain, TLS issuer and
 expiry, and any headers you list, then diffs those alongside the content.
 Identical content served from a different upstream is reported as drift, which
 is the reverse proxy failure that every status check reports as green.
+
+## Reports
+
+`--html` writes a self-contained page: filter chips, text search (`/` to focus),
+collapsible sections, sortable run tables, a light/dark toggle that remembers
+your choice, and animations that disable themselves under
+`prefers-reduced-motion`. No external stylesheet, script, font or image, so it
+opens on a machine with no network.
+
+Worked examples, committed so you can see the output without running anything:
+
+| Example | Shows |
+|---|---|
+| [`docs/report.example.html`](docs/report.example.html) | Text diff, hunks and context |
+| [`docs/report-fields.example.html`](docs/report-fields.example.html) | Structured diff, field by field |
+| [`docs/report-run.example.html`](docs/report-run.example.html) | A run across many entities |
+
+The look lives in `sitediff/templates/report.css` and `report.js`, which are
+ordinary files you can edit. They are inlined at build time. **Generated
+reports are build output and are gitignored; the templates that produce them
+are tracked.**
 
 ## Security posture
 

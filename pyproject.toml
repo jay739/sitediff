@@ -35,6 +35,7 @@ sitediff = "sitediff.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sitediff"]
+artifacts = ["sitediff/templates/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

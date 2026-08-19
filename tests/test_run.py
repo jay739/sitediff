@@ -17,8 +17,10 @@ from sitediff.config import Profile, load_profile
 from sitediff.engine import Status, compare_structured
 from sitediff.errors import InvalidProfileError, PairingError
 from sitediff.extract import Page
-from sitediff.pair import PairPlan, discover_keys, parse_pair
+from sitediff.pair import Crawl, PairPlan, crawl_keys, discover_keys, parse_pair
 from sitediff.run import execute, recent_runs
+from sitediff.source import EgressPolicy
+from sitediff.source import Source as HttpSource
 
 SCHOOLS = {f"40{n:02d}": 40 + n for n in range(1, 7)}
 FOOTER_OLD = "(c) 2025 Example State Department of Education"
@@ -115,11 +117,20 @@ def test_pair_requires_a_single_capture_group():
     assert "exactly one capture group" in str(exc.value)
 
 
-def test_pair_requires_keys_or_discovery():
+def test_pair_requires_keys_discovery_or_crawl():
     with pytest.raises(InvalidProfileError) as exc:
         parse_pair({"pair": {"left": "a", "right": "b",
                              "left_path": "/{key}", "right_path": "/{key}"}}, "p.toml")
-    assert "'keys' or a [pair.discover]" in str(exc.value)
+    assert "[pair.crawl]" in str(exc.value)
+
+
+def test_crawl_key_pattern_needs_one_capture_group():
+    with pytest.raises(InvalidProfileError) as exc:
+        parse_pair({"pair": {
+            "left": "a", "right": "b", "left_path": "/{key}", "right_path": "/{key}",
+            "crawl": {"source": "a", "key_pattern": r"/school/(\d+)/(\w+)"},
+        }}, "p.toml")
+    assert "exactly one capture group" in str(exc.value)
 
 
 def test_url_templates_must_carry_the_key_placeholder():
@@ -278,3 +289,101 @@ def test_browser_capture_is_absent_but_honest_about_it():
     with pytest.raises(UnsupportedCaptureError) as exc:
         from_html("<html></html>", Capture.BROWSER, "p.html")
     assert "sitediff[browser]" in str(exc.value)
+
+
+# --- crawl discovery ---------------------------------------------------------
+
+class CrawlHandler(BaseHTTPRequestHandler):
+    """A small crawlable site: an index linking to school pages, one offsite
+    link, one disallowed area, and a page that is only two hops from the seed."""
+
+    def do_GET(self):
+        if self.path == "/robots.txt":
+            self._send(b"User-agent: *\nDisallow: /private\n", "text/plain")
+            return
+        if self.path.startswith("/private"):
+            self._send(b"<html><body>secret</body></html>", "text/html")
+            return
+        if self.path == "/":
+            links = "".join(f'<a href="/school/{k}">s</a>' for k in ("4001", "4002"))
+            links += '<a href="/more">more</a><a href="https://elsewhere.example/x">off</a>'
+            links += '<a href="/private/hidden">no</a>'
+            self._send(f"<html><body>{links}</body></html>".encode(), "text/html")
+            return
+        if self.path == "/more":
+            self._send(b'<html><body><a href="/school/4003">s</a></body></html>', "text/html")
+            return
+        self._send(b"<html><body><main>page</main></body></html>", "text/html")
+
+    def _send(self, body, ctype):
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
+@pytest.fixture(scope="module")
+def crawlable():
+    srv = HTTPServer(("127.0.0.1", 0), CrawlHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield srv.server_address
+    srv.shutdown()
+
+
+def crawl_spec(host, port, **kw):
+    defaults = dict(source="site", seeds=("/",),
+                    key_pattern=re.compile(r"/school/(\d{4})"), delay_ms=0)
+    defaults.update(kw)
+    return Crawl(**defaults)
+
+
+def crawl_sources(host, port):
+    return {"site": HttpSource(name="site", base_url=f"http://{host}:{port}", timeout=5)}
+
+
+def test_crawl_collects_keys_across_hops(crawlable):
+    host, port = crawlable
+    result = crawl_keys(crawl_spec(host, port), crawl_sources(host, port),
+                        EgressPolicy([host]))
+    assert sorted(result.keys) == ["4001", "4002", "4003"]
+
+
+def test_crawl_stays_on_origin(crawlable):
+    """An offsite link must not be followed, whatever the allowlist says."""
+    host, port = crawlable
+    result = crawl_keys(crawl_spec(host, port), crawl_sources(host, port),
+                        EgressPolicy([host, "elsewhere.example"]))
+    assert not any("elsewhere" in u for u, _ in result.failures)
+
+
+def test_crawl_honours_robots_txt(crawlable):
+    host, port = crawlable
+    result = crawl_keys(crawl_spec(host, port), crawl_sources(host, port),
+                        EgressPolicy([host]))
+    assert any("robots.txt" == u for u, _ in result.failures)
+
+
+def test_crawl_can_ignore_robots_when_told(crawlable):
+    host, port = crawlable
+    result = crawl_keys(crawl_spec(host, port, respect_robots=False),
+                        crawl_sources(host, port), EgressPolicy([host]))
+    assert not any("robots.txt" == u for u, _ in result.failures)
+
+
+def test_crawl_respects_max_pages(crawlable):
+    host, port = crawlable
+    result = crawl_keys(crawl_spec(host, port, max_pages=2),
+                        crawl_sources(host, port), EgressPolicy([host]))
+    assert result.fetched <= 2
+
+
+def test_crawl_matching_nothing_is_actionable(crawlable):
+    host, port = crawlable
+    spec = crawl_spec(host, port, key_pattern=re.compile(r"/nomatch/(\d+)"))
+    with pytest.raises(PairingError) as exc:
+        crawl_keys(spec, crawl_sources(host, port), EgressPolicy([host]))
+    assert "matched against the URL" in str(exc.value)

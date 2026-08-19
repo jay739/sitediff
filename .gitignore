@@ -17,3 +17,10 @@ sitediff-*.toml
 # Client engagement material: architecture, hostnames and scope. Not tool docs.
 BUILD_PLAN.md
 *_PLAN.md
+
+# Generated reports are build output, not source. The templates that produce
+# them live in sitediff/templates/ and ARE tracked.
+/report.html
+*.report.html
+report-*.html
+docs/reports/
