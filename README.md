@@ -116,6 +116,14 @@ Worked report examples, viewable without running anything:
 [field diff](docs/report-fields.example.html) ·
 [run summary](docs/report-run.example.html)
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: no site-specific
+values in the package, the tool contacts nothing it was not told to, and
+documentation that can be generated is checked against the code by tests.
+
+Security policy and reporting: [SECURITY.md](SECURITY.md).
+
 ## Development
 
 ```

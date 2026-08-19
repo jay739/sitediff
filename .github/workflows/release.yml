@@ -1,0 +1,70 @@
+name: Release
+
+# Publishes the installable artifact. Building on every push proves packaging
+# is not broken; only a tag attaches the result to a release, so a normal
+# commit cannot accidentally publish anything.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and verify the wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build -o dist/
+
+      - name: The version must match the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          BUILT=$(ls dist/*.whl | sed -E 's/.*sitediff-([^-]+)-.*/\1/')
+          echo "tag=$TAG built=$BUILT"
+          test "$TAG" = "$BUILT" || {
+            echo "::error::tag $TAG does not match the built version $BUILT;"\
+                 "bump version in pyproject.toml or retag"
+            exit 1
+          }
+
+      - name: Install the artifact and run it
+        # A wheel that builds is not a wheel that works. This installs the real
+        # artifact into a clean environment and exercises the console script.
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install dist/*.whl
+          /tmp/clean/bin/sitediff --version
+          /tmp/clean/bin/sitediff help | grep -q "Exit codes"
+          /tmp/clean/bin/sitediff profiles | grep -q example
+          /tmp/clean/bin/sitediff sources -p example | grep -q "Egress allowlist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sitediff-dist
+          path: dist/*
+
+      - name: Attach to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            Install the attached wheel directly:
+
+            ```
+            pip install sitediff-*.whl
+            ```
+
+            Or from a checkout: `pip install .`

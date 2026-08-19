@@ -1,0 +1,32 @@
+name: A site this cannot handle
+description: A page whose values cannot be captured with any current strategy
+labels: ["capture"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Run `sitediff probe <url>` first. It reports which capture strategy a
+        page needs and why. If it recommends one that then fails, that is the
+        most useful thing to paste here.
+  - type: textarea
+    id: probe
+    attributes:
+      label: Output of `sitediff probe`
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: strategy
+    attributes:
+      label: Which strategies you tried
+      multiple: true
+      options: [static, hydration, json, browser]
+    validations:
+      required: true
+  - type: textarea
+    id: shape
+    attributes:
+      label: How the page delivers its values, if you know
+      description: |
+        Server-rendered? An XHR returning JSON? State embedded in a script tag?
+        `sitediff har <capture>.har` will tell you if you are not sure.

@@ -100,6 +100,16 @@ class Source:
         return self.base_url.rstrip("/") + "/" + path.lstrip("/")
 
 
+# Never diffed into a report even when a profile names them: their value is a
+# credential, and a report is an artifact that gets attached to a build and
+# passed around. Comparing them would also be meaningless, since they differ on
+# every request by design.
+NEVER_COMPARED_HEADERS = frozenset({
+    "set-cookie", "authorization", "proxy-authorization", "www-authenticate",
+    "cookie", "x-csrf-token", "x-xsrf-token", "x-api-key",
+})
+
+
 @dataclass
 class Response:
     """A fetched page plus everything about how it was fetched.
@@ -135,9 +145,13 @@ class Response:
         if self.redirects:
             meta["redirect_chain"] = " -> ".join(self.redirects)
         for name in include_headers or []:
-            value = self.headers.get(name.lower())
+            lowered = name.lower()
+            if lowered in NEVER_COMPARED_HEADERS:
+                meta[f"header:{lowered}"] = "[withheld]"
+                continue
+            value = self.headers.get(lowered)
             if value is not None:
-                meta[f"header:{name.lower()}"] = value
+                meta[f"header:{lowered}"] = value
         return meta
 
 

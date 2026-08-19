@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/jay739/sitediff/discussions
+    about: Ask how to configure something, or propose an idea before building it.

@@ -231,3 +231,28 @@ def test_explicit_content_type_is_not_overridden(echo):
                  headers={"Content-Type": "application/x-www-form-urlencoded"})
     r = fetch(f"http://{host}:{port}/api", src, EgressPolicy([host]))
     assert "form-urlencoded" in json.loads(r.body)["content_type"]
+
+
+# --- credentials must not reach a report -------------------------------------
+
+def test_credential_headers_are_withheld_from_reports():
+    """A report is an artifact that gets attached to a build and passed around.
+    Naming set-cookie in compare.headers must not put a session token in one."""
+    from sitediff.source import Response
+    r = Response(url="u", final_url="u", status=200, reason="OK",
+                 headers={"set-cookie": "session=abc123; HttpOnly",
+                          "authorization": "Bearer secret",
+                          "server": "nginx"},
+                 body="")
+    meta = r.metadata(["set-cookie", "authorization", "server"])
+    assert meta["header:set-cookie"] == "[withheld]"
+    assert meta["header:authorization"] == "[withheld]"
+    assert "abc123" not in str(meta) and "secret" not in str(meta)
+    assert meta["header:server"] == "nginx"
+
+
+def test_withholding_is_case_insensitive():
+    from sitediff.source import Response
+    r = Response(url="u", final_url="u", status=200, reason="OK",
+                 headers={"set-cookie": "s=1"}, body="")
+    assert r.metadata(["Set-Cookie"])["header:set-cookie"] == "[withheld]"
