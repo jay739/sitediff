@@ -9,9 +9,13 @@ from __future__ import annotations
 import re
 import tomllib
 from dataclasses import dataclass, field, replace
+from enum import Enum
 from pathlib import Path
 
-from .errors import InvalidProfileError, ProfileNotFoundError
+from urllib.parse import urlparse
+
+from .errors import InvalidProfileError, ProfileNotFoundError, SourceNotFoundError
+from .source import DEFAULT_MAX_REDIRECTS, DEFAULT_TIMEOUT, EgressPolicy, Source
 
 BUILTIN_PROFILE_DIR = Path(__file__).resolve().parent.parent / "profiles"
 
@@ -50,6 +54,21 @@ class Rule:
         return self.pattern.sub(self.replacement, line)
 
 
+class Mode(str, Enum):
+    """What counts as a difference.
+
+    VALUES  Both sides read the same data, so any disagreement is a defect.
+            Legacy against rewrite, region against region, cache against origin.
+
+    SHAPE   The sides hold different data on purpose (staging against
+            production), so values are masked and only labels, fields and
+            structure are compared.
+    """
+
+    VALUES = "values"
+    SHAPE = "shape"
+
+
 @dataclass(frozen=True)
 class Profile:
     name: str = "default"
@@ -72,6 +91,40 @@ class Profile:
     ignore_patterns: list[re.Pattern] = field(default_factory=list)
     normalize: list[Rule] = field(default_factory=list)
     context_lines: int = 3
+    mode: Mode = Mode.VALUES
+
+    # Acquisition and safety
+    sources: dict[str, Source] = field(default_factory=dict)
+    allow_hosts: list[str] = field(default_factory=list)
+    redact: list[Rule] = field(default_factory=list)
+    compare_headers: list[str] = field(default_factory=list)
+
+    def egress_policy(self) -> EgressPolicy:
+        """Hosts this profile may contact.
+
+        Defaults to exactly the hosts its own sources point at, so a profile
+        never reaches anywhere it did not explicitly configure. allow_hosts
+        only ever widens this, and only with what a human wrote down.
+        """
+        hosts = list(self.allow_hosts)
+        for source in self.sources.values():
+            host = urlparse(source.base_url).hostname
+            if host:
+                hosts.append(host)
+            if source.connect_to:
+                hosts.append(source.connect_to)
+        return EgressPolicy(sorted(set(hosts)))
+
+    def source(self, name: str) -> Source:
+        try:
+            return self.sources[name]
+        except KeyError:
+            raise SourceNotFoundError(name, sorted(self.sources)) from None
+
+    def apply_redaction(self, text: str) -> str:
+        for rule in self.redact:
+            text = rule.apply(text)
+        return text
 
     def with_overrides(self, **kwargs) -> "Profile":
         """Return a copy with non-None overrides applied (used by the CLI)."""
@@ -127,7 +180,8 @@ def load_profile(source: str | Path | None) -> Profile:
     extract = data.get("extract", {})
     compare = data.get("compare", {})
 
-    known_sections = {"profile", "extract", "compare", "normalize"}
+    known_sections = {"profile", "extract", "compare", "normalize",
+                      "redact", "security", "source"}
     unknown = set(data) - known_sections
     if unknown:
         raise InvalidProfileError(
@@ -135,6 +189,48 @@ def load_profile(source: str | Path | None) -> Profile:
             f"unknown section(s) {sorted(unknown)}; expected any of "
             f"{sorted(known_sections)}",
         )
+
+    def parse_rules(section: str) -> list[Rule]:
+        out = []
+        for i, raw in enumerate(data.get(section, [])):
+            if "pattern" not in raw:
+                raise InvalidProfileError(
+                    path, f"[[{section}]] entry {i} needs a 'pattern'")
+            if section == "normalize" and "replacement" not in raw:
+                raise InvalidProfileError(
+                    path, f"[[normalize]] entry {i} needs a 'replacement'")
+            out.append(Rule(
+                pattern=_compile([raw["pattern"]], path, f"{section}.pattern")[0],
+                replacement=raw.get("replacement", "[REDACTED]"),
+                note=raw.get("note", ""),
+            ))
+        return out
+
+    sources: dict[str, Source] = {}
+    for i, raw in enumerate(data.get("source", [])):
+        if "name" not in raw:
+            raise InvalidProfileError(path, f"[[source]] entry {i} needs a 'name'")
+        if raw["name"] in sources:
+            raise InvalidProfileError(path, f"duplicate source name {raw['name']!r}")
+        sources[raw["name"]] = Source(
+            name=raw["name"],
+            base_url=raw.get("base_url", ""),
+            connect_to=raw.get("connect_to", ""),
+            headers=raw.get("headers", {}),
+            timeout=float(raw.get("timeout", DEFAULT_TIMEOUT)),
+            verify_tls=raw.get("verify_tls", True),
+            max_redirects=int(raw.get("max_redirects", DEFAULT_MAX_REDIRECTS)),
+            follow_redirects=raw.get("follow_redirects", True),
+        )
+
+    mode_raw = compare.get("mode", Mode.VALUES.value)
+    try:
+        mode = Mode(mode_raw)
+    except ValueError:
+        raise InvalidProfileError(
+            path,
+            f"compare.mode must be one of {[m.value for m in Mode]}, got {mode_raw!r}",
+        ) from None
 
     rules = []
     for i, raw in enumerate(data.get("normalize", [])):
@@ -177,6 +273,13 @@ def load_profile(source: str | Path | None) -> Profile:
             path, "compare.ignore_patterns"),
         normalize=rules,
         context_lines=compare.get("context_lines", defaults.context_lines),
+        mode=mode,
+        sources=sources,
+        allow_hosts=_require_list_of_str(
+            data.get("security", {}).get("allow_hosts", []), path, "security.allow_hosts"),
+        redact=parse_rules("redact"),
+        compare_headers=_require_list_of_str(
+            compare.get("headers", []), path, "compare.headers"),
     )
 
 

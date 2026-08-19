@@ -1,0 +1,14 @@
+[profile]
+name = "default"
+description = "Conservative defaults. No network access until you add a source."
+
+[extract]
+# Inline tags are deliberately absent from block_tags: treating span or a as
+# block-level splits one sentence across several lines and separates every
+# value from the label next to it.
+exclude_selectors = []
+include_selectors = []
+
+[compare]
+mode = "values"
+context_lines = 3

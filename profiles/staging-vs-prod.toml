@@ -1,0 +1,24 @@
+[profile]
+name = "staging-vs-prod"
+description = "Shape parity for environments that hold different data on purpose."
+
+# Staging and production read different databases, so every value differs
+# legitimately and a value diff returns pure noise. Shape mode masks the values
+# and compares labels, fields and structure instead.
+
+[compare]
+mode = "shape"
+context_lines = 2
+headers = ["content-type"]
+
+[extract]
+# Compare the application surface, not the chrome that varies per environment.
+include_selectors = ["main", "[role=main]"]
+exclude_selectors = ["nav", "footer", ".env-banner", "[data-testid=debug]"]
+
+[security]
+allow_hosts = []
+
+[[redact]]
+pattern = '\b[\w.%-]+@[\w.-]+\.[A-Za-z]{2,}\b'
+note = "staging is often seeded with real-looking personal data"

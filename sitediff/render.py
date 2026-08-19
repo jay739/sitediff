@@ -16,6 +16,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 
+from .config import Mode
 from .engine import DiffResult, Hunk, Op, Status
 
 THEME = Theme(
@@ -37,8 +38,15 @@ THEME = Theme(
 _WORD = re.compile(r"\s+|\w+|[^\w\s]")
 
 
-def make_console(force_terminal: bool | None = None, no_color: bool = False) -> Console:
-    return Console(theme=THEME, force_terminal=force_terminal, no_color=no_color, soft_wrap=False)
+def make_console(
+    force_terminal: bool | None = None,
+    no_color: bool = False,
+    stderr: bool = False,
+) -> Console:
+    return Console(
+        theme=THEME, force_terminal=force_terminal, no_color=no_color,
+        soft_wrap=False, stderr=stderr,
+    )
 
 
 def _tokens(line: str) -> list[str]:
@@ -113,6 +121,21 @@ def render_summary(result: DiffResult, console: Console) -> None:
     body.append(f"-{result.removed}", style="diff.remove")
     body.append(f"   {result.similarity:.1%} similar", style="meta.key")
 
+    if result.mode is Mode.SHAPE:
+        body.append("\n")
+        body.append("shape mode: values masked, structure compared", style="meta.key")
+
+    if result.meta_changes:
+        body.append("\n\n")
+        body.append("response metadata differs\n", style="status.drift")
+        width = max(len(c.key) for c in result.meta_changes)
+        for change in result.meta_changes:
+            body.append(f"  {change.key:<{width}}  ", style="meta.key")
+            body.append(change.left or "(absent)", style="diff.remove")
+            body.append("  ->  ")
+            body.append(change.right or "(absent)", style="diff.add")
+            body.append("\n")
+
     extras = []
     if result.ignored:
         extras.append(f"{result.ignored} ignored by profile")
@@ -126,6 +149,10 @@ def render_summary(result: DiffResult, console: Console) -> None:
 
 
 def render_unified(result: DiffResult, console: Console) -> None:
+    if not result.hunks and result.meta_changes:
+        console.print("\n  Content matches; only response metadata differs.\n",
+                      style="status.drift")
+        return
     if result.status is Status.CLEAN:
         console.print("\n  No differences in visible content.\n", style="status.clean")
         return

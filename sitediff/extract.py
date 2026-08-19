@@ -7,7 +7,7 @@ thing, and diverge only when they do not.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
@@ -24,11 +24,17 @@ from .errors import (
 
 @dataclass
 class Page:
-    """An extracted page: its source path and the visible lines pulled from it."""
+    """An extracted page: where it came from, what it said, and how it arrived.
+
+    `meta` carries response facts (status, resolved address, certificate,
+    redirect chain) for pages acquired over the network. For proxy and region
+    checks that metadata is frequently where the defect actually is.
+    """
 
     path: str
     side: str
     lines: list[str]
+    meta: dict[str, str] = field(default_factory=dict)
 
     def __len__(self) -> int:
         return len(self.lines)
@@ -157,7 +163,22 @@ def extract(
 ) -> Page:
     """Extract visible text lines from an HTML file according to a profile."""
     path = str(path)
-    raw = read_html(path)
+    return extract_html(
+        read_html(path), profile, side=side, label=path,
+        allow_unrendered=allow_unrendered,
+    )
+
+
+def extract_html(
+    raw: str,
+    profile: Profile,
+    side: str = "page",
+    label: str = "<memory>",
+    allow_unrendered: bool = False,
+    meta: dict[str, str] | None = None,
+) -> Page:
+    """Extract visible text lines from an HTML string according to a profile."""
+    path = label
 
     if not allow_unrendered:
         for sentinel in profile.render_sentinels:
@@ -182,9 +203,18 @@ def extract(
 
     for rule in profile.normalize:
         lines = [rule.apply(line) for line in lines]
+
+    # Redaction runs last so nothing sensitive survives into a report, whatever
+    # the earlier rules did. Reports become CI artifacts and get passed around.
+    if profile.redact:
+        lines = [profile.apply_redaction(line) for line in lines]
+
     lines = [ln for ln in (l.strip() for l in lines) if ln]
 
     if not lines:
         raise EmptyExtractionError(path, side)
 
-    return Page(path=path, side=side, lines=lines)
+    clean_meta = {
+        k: profile.apply_redaction(v) for k, v in (meta or {}).items()
+    }
+    return Page(path=path, side=side, lines=lines, meta=clean_meta)

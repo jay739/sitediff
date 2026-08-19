@@ -84,3 +84,57 @@ class EmptyExtractionError(ExtractionError):
             f"matched nothing on this page. Run with --debug-lines to see what "
             f"the extractor kept."
         )
+
+
+class NetworkError(SiteDiffError):
+    """Base for anything that goes wrong acquiring a page over the network."""
+
+
+class EgressBlockedError(NetworkError):
+    """The tool refused to contact a host that the profile did not allow.
+
+    This is the control that answers 'can this tool send our pages somewhere
+    else'. It is enforced before every connection, including redirects.
+    """
+
+    def __init__(self, host: str, allowed: list[str], via: str = ""):
+        self.host = host
+        self.allowed = allowed
+        self.via = via
+        permitted = ", ".join(allowed) if allowed else "(nothing)"
+        reached = f" (reached via {via})" if via else ""
+        super().__init__(
+            f"Refusing to contact {host}{reached}: it is not in the egress "
+            f"allowlist.\nAllowed: {permitted}\n"
+            f"If this host is legitimate, add it to [security] allow_hosts in "
+            f"the profile. The tool never contacts a host you have not listed."
+        )
+
+
+class FetchError(NetworkError):
+    def __init__(self, url: str, reason: str):
+        self.url = url
+        self.reason = reason
+        super().__init__(f"Could not fetch {url}: {reason}")
+
+
+class TooManyRedirectsError(NetworkError):
+    def __init__(self, url: str, limit: int, chain: list[str]):
+        self.url = url
+        self.chain = chain
+        trail = "\n  ".join(chain)
+        super().__init__(
+            f"{url} exceeded {limit} redirects. Chain:\n  {trail}\n"
+            f"Raise max_redirects in the source config if this is expected."
+        )
+
+
+class SourceNotFoundError(ConfigError):
+    def __init__(self, name: str, known: list[str]):
+        self.name = name
+        self.known = known
+        available = ", ".join(known) if known else "(none defined)"
+        super().__init__(
+            f"No source named {name!r} in this profile.\nDefined sources: {available}\n"
+            f"Add one with a [[source]] block, or pass a file path instead."
+        )

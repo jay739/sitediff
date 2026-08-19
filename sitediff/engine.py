@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .config import Profile
+from .config import Mode, Profile
 from .extract import Page
 
 
@@ -57,6 +57,13 @@ class Hunk:
 
 
 @dataclass
+class MetaChange:
+    key: str
+    left: str
+    right: str
+
+
+@dataclass
 class DiffResult:
     left: Page
     right: Page
@@ -66,14 +73,41 @@ class DiffResult:
     ignored: int = 0
     noise_suppressed: int = 0
     similarity: float = 1.0
+    mode: Mode = Mode.VALUES
+    meta_changes: list[MetaChange] = field(default_factory=list)
 
     @property
     def status(self) -> Status:
-        return Status.DRIFT if (self.added or self.removed) else Status.CLEAN
+        if self.added or self.removed or self.meta_changes:
+            return Status.DRIFT
+        return Status.CLEAN
 
     @property
     def changed(self) -> int:
         return self.added + self.removed
+
+
+# In shape mode the two sides read different databases, so every value differs
+# legitimately. Masking them leaves labels, fields and structure, which is what
+# a staging-against-production check is actually asserting.
+_VALUE = re.compile(
+    r"\d[\d,.]*\s*%"          # percentages
+    r"|[$\u00a3\u20ac]\s*\d[\d,.]*"  # currency
+    r"|\b\d[\d,.:/-]*\b"      # bare numbers, dates, times
+)
+
+
+def shape_of(line: str) -> str:
+    return _VALUE.sub("\u2022", line)
+
+
+def _compare_meta(left: Page, right: Page) -> list[MetaChange]:
+    changes = []
+    for key in sorted(set(left.meta) | set(right.meta)):
+        a, b = left.meta.get(key, ""), right.meta.get(key, "")
+        if a != b:
+            changes.append(MetaChange(key, a, b))
+    return changes
 
 
 def _filter(lines: list[str], profile: Profile) -> tuple[list[str], int]:
@@ -226,6 +260,10 @@ def compare(
         right_lines = [l for l in right_lines if not noise.matches(l)]
         suppressed = before - (len(left_lines) + len(right_lines))
 
+    if profile.mode is Mode.SHAPE:
+        left_lines = [shape_of(l) for l in left_lines]
+        right_lines = [shape_of(l) for l in right_lines]
+
     matcher = difflib.SequenceMatcher(None, left_lines, right_lines, autojunk=False)
     result = DiffResult(
         left=left,
@@ -233,6 +271,8 @@ def compare(
         ignored=ignored_l + ignored_r,
         noise_suppressed=suppressed,
         similarity=matcher.ratio(),
+        mode=profile.mode,
+        meta_changes=_compare_meta(left, right),
     )
 
     context = max(0, profile.context_lines)

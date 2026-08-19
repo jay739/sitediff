@@ -9,15 +9,21 @@ Exit codes follow the diff convention so this composes in CI:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
 from . import __version__
-from .config import list_builtin_profiles, load_profile
+from .config import Profile, list_builtin_profiles, load_profile
 from .engine import Status, compare, noise_baseline
 from .errors import SiteDiffError
-from .extract import extract
+from .extract import Page, extract, extract_html
+from rich.text import Text
+
 from .render import make_console, render_side_by_side, render_summary, render_unified
+from .source import Source, fetch
+
+SOURCE_REF = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+):(?P<path>/.*)?$")
 
 EXIT_CLEAN, EXIT_DRIFT, EXIT_ERROR = 0, 1, 2
 
@@ -31,8 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     cmp_p = sub.add_parser("compare", help="diff two saved HTML pages")
-    cmp_p.add_argument("left", help="HTML of the reference side (e.g. legacy)")
-    cmp_p.add_argument("right", help="HTML of the candidate side (e.g. rewrite)")
+    cmp_p.add_argument("left", help="saved HTML file, URL, or source:/path (reference side)")
+    cmp_p.add_argument("right", help="saved HTML file, URL, or source:/path (candidate side)")
     cmp_p.add_argument("-p", "--profile", help="built-in profile name or path to a .toml")
     cmp_p.add_argument("-s", "--side-by-side", action="store_true", help="two-column view")
     cmp_p.add_argument("--html", metavar="PATH", help="also write a standalone HTML report")
@@ -53,16 +59,53 @@ def build_parser() -> argparse.ArgumentParser:
     ex_p.add_argument("-n", "--numbers", action="store_true", help="prefix line numbers")
     ex_p.add_argument("--allow-unrendered", action="store_true")
 
+    f_p = sub.add_parser("fetch", help="fetch one page and report how it was served")
+    f_p.add_argument("target", help="URL or source:/path")
+    f_p.add_argument("-p", "--profile")
+    f_p.add_argument("--body", action="store_true", help="also print extracted lines")
+
     sub.add_parser("profiles", help="list the built-in profiles")
+    src_p = sub.add_parser("sources", help="list sources and the egress allowlist")
+    src_p.add_argument("-p", "--profile")
     return parser
+
+
+def resolve_side(token: str, profile: Profile, side: str, allow_unrendered: bool) -> Page:
+    """Turn one command line argument into an extracted page.
+
+    Accepted forms, in order: an explicit URL, a `sourcename:/path` reference
+    into the profile, or a path to a saved HTML file.
+    """
+    if token.startswith(("http://", "https://")):
+        source = Source(name=side, base_url=token)
+        policy = profile.egress_policy()
+        response = fetch(token, source, policy)
+        return _page_from_response(response, token, profile, side, allow_unrendered)
+
+    match = SOURCE_REF.match(token)
+    if match and match.group("name") in profile.sources:
+        source = profile.source(match.group("name"))
+        url = source.url_for(match.group("path") or "")
+        response = fetch(url, source, profile.egress_policy())
+        return _page_from_response(response, url, profile, side, allow_unrendered)
+
+    return extract(token, profile, side=side, allow_unrendered=allow_unrendered)
+
+
+def _page_from_response(response, url, profile, side, allow_unrendered) -> Page:
+    return extract_html(
+        response.body, profile, side=side, label=url,
+        allow_unrendered=allow_unrendered,
+        meta=response.metadata(profile.compare_headers),
+    )
 
 
 def cmd_compare(args) -> int:
     profile = load_profile(args.profile).with_overrides(context_lines=args.context)
     console = make_console(no_color=args.no_color)
 
-    left = extract(args.left, profile, side="left", allow_unrendered=args.allow_unrendered)
-    right = extract(args.right, profile, side="right", allow_unrendered=args.allow_unrendered)
+    left = resolve_side(args.left, profile, "left", args.allow_unrendered)
+    right = resolve_side(args.right, profile, "right", args.allow_unrendered)
 
     noise = None
     if args.baseline:
@@ -108,6 +151,47 @@ def cmd_extract(args) -> int:
     return EXIT_CLEAN
 
 
+def cmd_fetch(args) -> int:
+    profile = load_profile(args.profile)
+    console = make_console()
+    page = resolve_side(args.target, profile, "page", allow_unrendered=True)
+
+    console.print()
+    console.print(f"  [bold]{page.path}[/]")
+    if page.meta:
+        width = max(len(k) for k in page.meta)
+        for key, value in page.meta.items():
+            console.print(f"  [dim]{key:<{width}}[/]  {value}", highlight=False)
+    console.print(f"  [dim]{'lines':<{max(5, len(max(page.meta, key=len, default='')))}}[/]"
+                  f"  {len(page.lines)}", highlight=False)
+    if args.body:
+        console.print()
+        for line in page.lines:
+            console.print(f"  {line}", highlight=False)
+    console.print()
+    return EXIT_CLEAN
+
+
+def cmd_sources(args) -> int:
+    console = make_console()
+    profile = load_profile(getattr(args, "profile", None))
+    if not profile.sources:
+        console.print("\n  This profile defines no sources.\n", style="yellow")
+    else:
+        console.print("\n  Sources:\n", style="bold")
+        for name, src in profile.sources.items():
+            console.print(f"  [bold]{name}[/]  {src.base_url}")
+            if src.connect_to:
+                console.print(f"      [dim]connect_to {src.connect_to} "
+                              f"(Host header and SNI preserved)[/]")
+    policy = profile.egress_policy()
+    console.print("\n  Egress allowlist (nothing else is ever contacted):", style="bold")
+    for host in policy.allowed or ["(empty: network access disabled)"]:
+        console.print(f"    {host}", style="dim")
+    console.print()
+    return EXIT_CLEAN
+
+
 def cmd_profiles(args) -> int:
     console = make_console()
     rows = list_builtin_profiles()
@@ -124,12 +208,20 @@ def cmd_profiles(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    handlers = {"compare": cmd_compare, "extract": cmd_extract, "profiles": cmd_profiles}
+    handlers = {
+        "compare": cmd_compare, "extract": cmd_extract, "profiles": cmd_profiles,
+        "fetch": cmd_fetch, "sources": cmd_sources,
+    }
     try:
         return handlers[args.command](args)
     except SiteDiffError as exc:
-        console = make_console()
-        console.print(f"\n[bold red]error:[/] {exc}\n", highlight=False)
+        console = make_console(stderr=True)
+        # Error text carries profile keys such as [security], which rich would
+        # otherwise consume as markup, so build it as literal Text.
+        message = Text("\nerror: ", style="bold red")
+        message.append(str(exc), style="")
+        console.print(message)
+        console.print()
         return EXIT_ERROR
     except KeyboardInterrupt:
         return EXIT_ERROR
