@@ -13,3 +13,7 @@ reports/
 .sitediff/
 sitediff-*.toml
 !sitediff/profiles/
+
+# Client engagement material: architecture, hostnames and scope. Not tool docs.
+BUILD_PLAN.md
+*_PLAN.md
