@@ -114,6 +114,14 @@ def build_parser() -> argparse.ArgumentParser:
     runs_p = sub.add_parser("runs", help="list recent runs")
     runs_p.add_argument("--db", metavar="PATH")
 
+    har_p = sub.add_parser(
+        "har", help="read a browser HAR export and find the site's data endpoints")
+    har_p.add_argument("file", help="path to a .har exported from devtools")
+    har_p.add_argument("--all", action="store_true",
+                       help="list every endpoint, not only those carrying data")
+    har_p.add_argument("--suggest", action="store_true",
+                       help="print a profile fragment wiring up the data endpoints")
+
     sub.add_parser("profiles", help="list the built-in profiles")
     src_p = sub.add_parser("sources", help="list sources and the egress allowlist")
     src_p.add_argument("-p", "--profile")
@@ -392,6 +400,52 @@ def cmd_runs(args) -> int:
     return EXIT_CLEAN
 
 
+def cmd_har(args) -> int:
+    from .har import load, suggest_profile
+
+    console = make_console()
+    report = load(args.file)
+
+    console.print(f"\n  [bold]{report.path}[/]")
+    console.print(f"  {len(report.endpoints)} endpoint(s) across "
+                  f"{len(report.hosts)} host(s)", style="dim")
+    if report.skipped_third_party or report.skipped_assets:
+        console.print(f"  skipped {report.skipped_third_party} third-party and "
+                      f"{report.skipped_assets} asset request(s)", style="dim")
+    if report.missing_bodies:
+        console.print(f"  [yellow]{report.missing_bodies} response(s) had no body; "
+                      f"re-export with 'Save all as HAR with content'[/]")
+
+    shown = report.endpoints if args.all else report.data_endpoints
+    if not shown:
+        console.print("\n  No response carried enough numbers to look like data.",
+                      style="yellow")
+        console.print("  Re-export with Preserve log on, after clicking through "
+                      "every view.\n", style="dim")
+        return EXIT_CLEAN
+
+    heading = "Every endpoint" if args.all else "Endpoints carrying data"
+    console.print(f"\n  [bold]{heading}[/]\n")
+    for endpoint in shown:
+        marker = "[green]data[/]" if endpoint.carries_data else "[dim]    [/]"
+        console.print(f"  {marker} [bold]{endpoint.method}[/] {endpoint.path}")
+        console.print(f"         {endpoint.response_bytes:>9,}b  "
+                      f"{endpoint.decimals:>4} numbers  {endpoint.response_mime}"
+                      f"  x{endpoint.calls}", style="dim")
+        if endpoint.body:
+            keys = ", ".join(list(endpoint.params)[:8])
+            console.print(f"         payload ({endpoint.mime.split(';')[0]}): {keys}",
+                          style="dim")
+    console.print()
+
+    if args.suggest:
+        console.print("  [bold]Suggested profile fragment[/]\n")
+        for line in suggest_profile(report).splitlines():
+            console.print(Text(f"    {line}", style="dim"))
+        console.print()
+    return EXIT_CLEAN
+
+
 def cmd_probe(args) -> int:
     from .probe import probe, suggested_profile
 
@@ -470,7 +524,7 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         "compare": cmd_compare, "extract": cmd_extract, "profiles": cmd_profiles,
         "fetch": cmd_fetch, "sources": cmd_sources, "probe": cmd_probe,
-        "run": cmd_run, "accept": cmd_accept, "runs": cmd_runs,
+        "run": cmd_run, "accept": cmd_accept, "runs": cmd_runs, "har": cmd_har,
     }
     try:
         return handlers[args.command](args)

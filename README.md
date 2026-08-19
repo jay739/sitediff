@@ -79,6 +79,43 @@ Exit codes follow the diff convention, so this composes in CI:
 | `1` | Drift was found |
 | `2` | The run failed |
 
+## Finding a site's data endpoints
+
+Working out how an application fetches its values is the slowest part of
+onboarding a site, and it is normally done by hand: open devtools, click every
+view, read each request, guess which response carries the data. A HAR export
+already contains all of it.
+
+```
+sitediff har capture.har --suggest
+```
+
+```
+  13 endpoint(s) across 1 host(s)
+  skipped 2 third-party and 0 asset request(s)
+
+  Endpoints carrying data
+
+  data POST /Records/GetRecordView/
+           206,996b   202 numbers  text/html  x2
+         payload (application/x-www-form-urlencoded): SEXCODE, RACECODE, LEA, RECORD_ID
+  data POST /Assessments/GetElaPerformanceBarChart
+            16,252b    20 numbers  application/json  x1
+```
+
+Endpoints are ranked by how many numbers their response contains, which is
+evidence rather than a verdict: a response full of figures is carrying data, one
+full of markup is carrying layout. Third-party beacons and static assets are
+dropped, and an endpoint called several times is listed once, keeping its
+richest response.
+
+`--suggest` prints a profile fragment with a `[[pair.page]]` block per data
+endpoint and the captured payload as `left_body`. Export with **Save all as HAR
+with content**, and turn on **Preserve log** before clicking through the views,
+or the capture will hold only the last one.
+
+Reading a HAR makes no network requests, and a test enforces that.
+
 ## Probing an unfamiliar site
 
 `sitediff probe` answers, from a single plain GET with no JavaScript executed,
