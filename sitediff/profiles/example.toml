@@ -1,0 +1,59 @@
+[profile]
+name = "example"
+description = "Annotated template. Copy into .sitediff/ and fill in your own hosts."
+
+# Copy this file to .sitediff/<yourname>.toml in your own repository, or to the
+# per-user profile directory, then run: sitediff compare left:/ right:/ -p <yourname>
+#
+# Nothing in this file is baked into the tool. Every host it may contact comes
+# from the profile you write.
+
+[[source]]
+name = "left"
+base_url = "https://reference.example.com"
+
+[[source]]
+name = "right"
+base_url = "https://candidate.example.com"
+# Connect to a chosen address while keeping the original Host header and TLS
+# SNI. Use it to reach one region behind a geo-routed name, the origin behind
+# a CDN, or a service by its tunnel address rather than its public name.
+# connect_to = "203.0.113.10"
+# headers = { Authorization = "Bearer ..." }
+
+[extract]
+# Compare the application surface, not the chrome that varies by environment.
+include_selectors = []
+exclude_selectors = []
+# Refuse a page captured before it finished rendering. Diffing a half-rendered
+# page reports every value as missing, which looks like catastrophic data loss.
+render_sentinels = []
+
+[compare]
+# "values" when both sides read the same data and any disagreement is a defect.
+# "shape" when the sides hold different data on purpose (staging vs production),
+# which masks values and compares labels and structure instead.
+mode = "values"
+context_lines = 3
+headers = ["server", "content-type"]
+# Differences that are intentional. Without these, one deliberate change is
+# reported identically on every page and buries the findings that matter.
+ignore_patterns = []
+
+# Applied to every extracted line before comparison. Absolute URLs differ by
+# design between two environments, so normalise rather than read the noise.
+# [[normalize]]
+# pattern = 'https?://[A-Za-z0-9.-]+(:\d+)?'
+# replacement = '{origin}'
+
+[security]
+# The complete list of hosts this profile may contact. Hosts named by the
+# sources above are included automatically. A leading dot matches subdomains
+# only: ".example.com" permits "a.example.com" but not "example.com.attacker.net".
+# Leave every list empty and the tool reaches nowhere at all.
+allow_hosts = []
+
+# Diff reports become CI artifacts and get passed around. Redaction runs last,
+# after every other rule, on page content and response metadata alike.
+# [[redact]]
+# pattern = '(?i)(api[_-]?key|token|password|secret)["\s:=]+\S+'

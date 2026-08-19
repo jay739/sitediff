@@ -7,3 +7,9 @@ build/
 *.egg-info/
 docs/PACKAGES.md
 reports/
+
+# Site-specific profiles name real hosts, addresses and clients. They belong in
+# the adopting team's own repository, never in this one.
+.sitediff/
+sitediff-*.toml
+!sitediff/profiles/

@@ -15,7 +15,7 @@ import sys
 from rich.text import Text
 
 from . import __version__
-from .config import Profile, list_builtin_profiles, load_profile
+from .config import Profile, discover_profiles, load_profile, profile_search_path
 from .engine import Status, compare, noise_baseline
 from .errors import SiteDiffError
 from .extract import Page, extract, extract_html
@@ -193,15 +193,21 @@ def cmd_sources(args) -> int:
 
 def cmd_profiles(args) -> int:
     console = make_console()
-    rows = list_builtin_profiles()
+    rows = discover_profiles()
     if not rows:
-        console.print("No built-in profiles found.", style="yellow")
-        return EXIT_CLEAN
-    console.print("\n  Built-in profiles:\n", style="bold")
-    width = max(len(n) for n, _ in rows)
-    for name, desc in rows:
-        console.print(f"  [bold]{name:<{width}}[/]  [dim]{desc}[/]")
-    console.print("\n  Use with: sitediff compare LEFT RIGHT -p <name>\n", style="dim")
+        console.print("No profiles found.", style="yellow")
+    else:
+        console.print("\n  Profiles:\n", style="bold")
+        width = max(len(n) for n, _, _ in rows)
+        for name, desc, path in rows:
+            console.print(f"  [bold]{name:<{width}}[/]  [dim]{desc}[/]")
+            console.print(f"  {'':<{width}}  [dim cyan]{path}[/]")
+    console.print("\n  Searched, most specific first:", style="bold")
+    for directory in profile_search_path():
+        mark = "" if directory.is_dir() else "  [dim](absent)[/]"
+        console.print(f"    [dim]{directory}[/]{mark}")
+    console.print("\n  Site-specific profiles belong in ./.sitediff/ in your own "
+                  "repo,\n  not in this tool.\n", style="dim")
     return EXIT_CLEAN
 
 

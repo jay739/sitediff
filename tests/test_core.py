@@ -2,6 +2,7 @@
 prototype crash or silently mangle output on real pages."""
 
 import pathlib
+import re
 import sys
 
 import pytest
@@ -188,3 +189,59 @@ def test_unknown_profile_lists_search_paths():
     with pytest.raises(ProfileNotFoundError) as exc:
         load_profile("does-not-exist")
     assert "Looked in" in str(exc.value)
+
+
+# --- profile discovery -------------------------------------------------------
+
+def test_local_profile_dir_shadows_bundled(tmp_path, monkeypatch):
+    """A team's own profile wins over a bundled template of the same name."""
+    local = tmp_path / ".sitediff"
+    local.mkdir()
+    (local / "default.toml").write_text(
+        '[profile]\nname = "default"\ndescription = "local override"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    assert load_profile("default").description == "local override"
+
+
+def test_env_var_dir_takes_precedence(tmp_path, monkeypatch):
+    elsewhere = tmp_path / "shared"
+    elsewhere.mkdir()
+    (elsewhere / "team.toml").write_text(
+        '[profile]\nname = "team"\n[security]\nallow_hosts = ["a.example.com"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SITEDIFF_PROFILES", str(elsewhere))
+    monkeypatch.chdir(tmp_path)
+    assert load_profile("team").egress_policy().allowed == ["a.example.com"]
+
+
+def test_missing_profile_reports_every_directory_searched(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ProfileNotFoundError) as exc:
+        load_profile("nope")
+    assert ".sitediff" in str(exc.value)
+
+
+def test_no_host_literals_are_baked_into_the_engine():
+    """The egress allowlist must come from the profile, never from the tool."""
+    import sitediff
+    engine_dir = pathlib.Path(sitediff.__file__).parent
+    pattern = re.compile(r"https?://(?!reference\.example|candidate\.example)[a-z0-9.-]+\.[a-z]{2,}")
+    for module in engine_dir.glob("*.py"):
+        text = module.read_text(encoding="utf-8")
+        assert not pattern.search(text), f"{module.name} contains a hardcoded host"
+
+
+def test_bundled_profiles_name_only_reserved_example_domains():
+    """A shipped template must never carry a usable allowlist.
+
+    RFC 2606 reserves .example / .example.com for documentation, so a template
+    referencing those cannot reach anything real even if run unedited.
+    """
+    import sitediff
+    bundled = pathlib.Path(sitediff.__file__).parent / "profiles"
+    for p in bundled.glob("*.toml"):
+        for host in load_profile(str(p)).egress_policy().allowed:
+            assert host.endswith((".example.com", ".example")), f"{p.name}: {host}"

@@ -97,7 +97,33 @@ out first is the point.
 ## Profiles
 
 Everything site-specific lives in a TOML profile, so the tool itself stays
-generic. Run `sitediff profiles` to list the bundled ones.
+generic. Nothing about any particular site is compiled into the engine.
+
+### Where profiles live
+
+Profiles that describe a real site name real hosts, addresses and sometimes
+clients. That is infrastructure detail, and it does not belong in this
+repository. It belongs in yours, where it stays under your own review.
+
+Named profiles are looked up in this order, most specific first:
+
+| Location | Use |
+|---|---|
+| `$SITEDIFF_PROFILES` | Explicit directories, colon separated (semicolon on Windows) |
+| `./.sitediff/` | Checked into the consuming team's own repo, alongside its CI |
+| Per-user config dir | `~/.config/sitediff`, `~/Library/Application Support/sitediff`, or `%APPDATA%\sitediff` |
+| Bundled with the package | Generic templates only |
+
+An earlier entry shadows a later one, so a local profile overrides a bundled
+template of the same name. `sitediff profiles` prints what it found and where,
+along with every directory it searched.
+
+A path is always accepted directly: `sitediff compare a.html b.html -p ./my.toml`.
+
+Only `default` and `example` ship with the package, and both are templates. Copy
+`example` into `./.sitediff/` and fill in your own hosts. Note that the
+allowlist being versioned in your repo is a feature, since it is a security
+control and benefits from review.
 
 ```toml
 [profile]
@@ -153,6 +179,12 @@ answer is that it is a local CLI with no egress it was not told to make.
 
 **No network access by default.** A profile with no sources and no
 `allow_hosts` has an empty allowlist, and an empty allowlist blocks everything.
+
+**Nothing is hardcoded.** There is not a single hostname or address literal in
+any engine module, and a test enforces that. Every host the tool may contact
+comes from the profile you write. Bundled templates may reference only RFC 2606
+documentation domains, which cannot reach anything real, and that is enforced
+too.
 
 **Egress allowlist.** The tool contacts only hosts the profile names. This is
 checked before every connection, including each redirect hop, so an allowed

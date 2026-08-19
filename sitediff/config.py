@@ -6,7 +6,9 @@ so a team can check one into their own repo and hand it to this tool.
 
 from __future__ import annotations
 
+import os
 import re
+import sys
 import tomllib
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -16,8 +18,41 @@ from urllib.parse import urlparse
 from .errors import InvalidProfileError, ProfileNotFoundError, SourceNotFoundError
 from .source import DEFAULT_MAX_REDIRECTS, DEFAULT_TIMEOUT, EgressPolicy, Source
 
-# Inside the package so the bundled profiles ship with the wheel.
+# Inside the package so the bundled templates ship with the wheel. Only generic
+# starting points live here. Profiles describing a real site name real hosts and
+# addresses, which is infrastructure detail that does not belong in this repo.
 BUILTIN_PROFILE_DIR = Path(__file__).resolve().parent / "profiles"
+
+PROFILE_ENV_VAR = "SITEDIFF_PROFILES"
+LOCAL_PROFILE_DIR = ".sitediff"
+
+
+def user_profile_dir() -> Path:
+    """Per-user profile directory, following each platform's convention."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return base / "sitediff"
+
+
+def profile_search_path() -> list[Path]:
+    """Where named profiles are looked up, most specific first.
+
+    Site-specific profiles are expected to live in the consuming team's own
+    repository (./.sitediff/) or on the machine, not inside this tool. That
+    keeps real hostnames and addresses out of this repo while leaving the
+    egress allowlist under the adopting team's own review.
+    """
+    paths: list[Path] = []
+    env = os.environ.get(PROFILE_ENV_VAR, "")
+    paths.extend(Path(part) for part in env.split(os.pathsep) if part.strip())
+    paths.append(Path.cwd() / LOCAL_PROFILE_DIR)
+    paths.append(user_profile_dir())
+    paths.append(BUILTIN_PROFILE_DIR)
+    return paths
 
 DEFAULT_NOISE_TAGS = [
     "script", "style", "noscript", "template", "svg", "path", "iframe",
@@ -160,14 +195,21 @@ def load_profile(source: str | Path | None) -> Profile:
         return Profile()
 
     candidate = Path(source)
-    searched = [str(candidate.resolve())] if candidate.suffix else []
+    searched: list[str] = []
 
     if not candidate.is_file():
-        by_name = BUILTIN_PROFILE_DIR / f"{source}.toml"
-        searched.append(str(by_name))
-        if not by_name.is_file():
+        if candidate.suffix:
+            searched.append(str(candidate.resolve()))
+        found = None
+        for directory in profile_search_path():
+            by_name = directory / f"{source}.toml"
+            searched.append(str(by_name))
+            if by_name.is_file():
+                found = by_name
+                break
+        if found is None:
             raise ProfileNotFoundError(str(source), searched)
-        candidate = by_name
+        candidate = found
 
     path = str(candidate)
     try:
@@ -287,14 +329,24 @@ def load_profile(source: str | Path | None) -> Profile:
     )
 
 
-def list_builtin_profiles() -> list[tuple[str, str]]:
-    if not BUILTIN_PROFILE_DIR.is_dir():
-        return []
-    out = []
-    for p in sorted(BUILTIN_PROFILE_DIR.glob("*.toml")):
-        try:
-            meta = tomllib.loads(p.read_text(encoding="utf-8")).get("profile", {})
-            out.append((p.stem, meta.get("description", "")))
-        except (tomllib.TOMLDecodeError, OSError):
-            out.append((p.stem, "(unreadable)"))
+def discover_profiles() -> list[tuple[str, str, Path]]:
+    """Every profile reachable on the search path, as (name, description, path).
+
+    Earlier entries win, matching load_profile, so a local profile shadows a
+    bundled template of the same name rather than appearing twice.
+    """
+    out: list[tuple[str, str, Path]] = []
+    seen: set[str] = set()
+    for directory in profile_search_path():
+        if not directory.is_dir():
+            continue
+        for p in sorted(directory.glob("*.toml")):
+            if p.stem in seen:
+                continue
+            seen.add(p.stem)
+            try:
+                meta = tomllib.loads(p.read_text(encoding="utf-8")).get("profile", {})
+                out.append((p.stem, meta.get("description", ""), p))
+            except (tomllib.TOMLDecodeError, OSError):
+                out.append((p.stem, "(unreadable)", p))
     return out
