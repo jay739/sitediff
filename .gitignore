@@ -19,8 +19,10 @@ BUILD_PLAN.md
 *_PLAN.md
 
 # Generated reports are build output, not source. The templates that produce
-# them live in sitediff/templates/ and ARE tracked.
+# them live in sitediff/templates/ and ARE tracked, as are the worked examples
+# under docs/, which are named *.example.html so this rule cannot catch them.
 /report.html
 *.report.html
 report-*.html
+!*.example.html
 docs/reports/
