@@ -87,6 +87,10 @@ class Source:
     # from the layers above it. config validates the value.
     capture: str = "static"
     hydration_marker: str = ""
+    # Data endpoints on server-rendered stacks are frequently POST actions
+    # taking a body rather than a query string, so GET alone cannot reach them.
+    method: str = "GET"
+    body: str = ""
 
     def url_for(self, path: str = "") -> str:
         if not path:
@@ -208,7 +212,8 @@ def _decode(raw: bytes, headers: dict[str, str]) -> str:
         return raw.decode("utf-8", errors="replace")
 
 
-def _single_request(url: str, source: Source, policy: EgressPolicy, via: str):
+def _single_request(url: str, source: Source, policy: EgressPolicy, via: str,
+                    body: str = ""):
     parsed = urlparse(url)
     host = parsed.hostname or ""
     if not host:
@@ -234,6 +239,9 @@ def _single_request(url: str, source: Source, policy: EgressPolicy, via: str):
         conn = _PinnedHTTPConnection(host, connect_addr, source.timeout, port)
 
     path = urlunparse(("", "", parsed.path or "/", parsed.params, parsed.query, ""))
+    method = (source.method or "GET").upper()
+    payload = (body or source.body or "").encode("utf-8")
+
     headers = {
         "Host": parsed.netloc,
         "User-Agent": "sitediff",
@@ -242,9 +250,12 @@ def _single_request(url: str, source: Source, policy: EgressPolicy, via: str):
         "Connection": "close",
         **source.headers,
     }
+    if payload:
+        headers.setdefault("Content-Type", "application/json")
+        headers["Content-Length"] = str(len(payload))
 
     try:
-        conn.request("GET", path, headers=headers)
+        conn.request(method, path, body=payload or None, headers=headers)
         raw_response = conn.getresponse()
         raw_body = raw_response.read(MAX_BODY_BYTES)
         response_headers = {k.lower(): v for k, v in raw_response.getheaders()}
@@ -267,7 +278,7 @@ def _single_request(url: str, source: Source, policy: EgressPolicy, via: str):
     return status, reason, response_headers, raw_body, peer_ip, peer_cert
 
 
-def fetch(url: str, source: Source, policy: EgressPolicy) -> Response:
+def fetch(url: str, source: Source, policy: EgressPolicy, body: str = "") -> Response:
     """Fetch a URL, following redirects with the egress policy applied to each hop."""
     started = time.monotonic()
     chain: list[str] = []
@@ -276,7 +287,7 @@ def fetch(url: str, source: Source, policy: EgressPolicy) -> Response:
 
     for _ in range(source.max_redirects + 1):
         status, reason, headers, raw, peer_ip, cert = _single_request(
-            current, source, policy, via
+            current, source, policy, via, body
         )
 
         if source.follow_redirects and status in (301, 302, 303, 307, 308):

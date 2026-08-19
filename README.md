@@ -294,6 +294,8 @@ Required only for `sitediff run`. `sitediff compare` needs none of it.
 | `base_url` | string | `""` | Scheme, host and optional port |
 | `connect_to` | string | `""` | Address to actually connect to, keeping the original `Host` header and TLS SNI. Reaches one region behind a geo-routed name, an origin behind a CDN, or a service by tunnel address |
 | `headers` | table | `{}` | Extra request headers, for example `Authorization` |
+| `method` | string | `GET` | HTTP method. Data endpoints on server-rendered stacks are often POST actions |
+| `body` | string | `""` | Request body, sent as JSON unless `headers` says otherwise. `{key}` is substituted with the entity key during a run |
 | `timeout` | number | `30.0` | Seconds before a request is abandoned |
 | `verify_tls` | bool | `true` | Set false only for an endpoint expected to present an untrusted certificate |
 | `follow_redirects` | bool | `true` | Follow 3xx responses |

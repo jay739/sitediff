@@ -185,6 +185,7 @@ SECURITY_KEYS = {"allow_hosts"}
 SOURCE_KEYS = {
     "name", "base_url", "connect_to", "headers", "timeout", "verify_tls",
     "max_redirects", "follow_redirects", "capture", "hydration_marker",
+    "method", "body",
 }
 RULE_KEYS = {"pattern", "replacement", "note"}
 
@@ -314,6 +315,8 @@ def load_profile(source: str | Path | None) -> Profile:
             name=raw["name"],
             capture=capture_mode,
             hydration_marker=raw.get("hydration_marker", ""),
+            method=str(raw.get("method", "GET")).upper(),
+            body=raw.get("body", ""),
             base_url=raw.get("base_url", ""),
             connect_to=raw.get("connect_to", ""),
             headers=raw.get("headers", {}),

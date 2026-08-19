@@ -109,7 +109,10 @@ def _compare_one(key: str, plan: PairPlan, profile: Profile,
                              (plan.right, right_path, "right")):
         source = profile.source(name)
         url = source.url_for(path)
-        response = fetch(url, source, policy)
+        # The key is templated into the body too, so POST endpoints that take
+        # the entity id in a payload rather than a query string still pair.
+        body = source.body.replace("{key}", key) if source.body else ""
+        response = fetch(url, source, policy, body=body)
         # A non-2xx is not a comparable page. Left unchecked, two 404 bodies
         # compare equal and an entity that exists on neither side is reported
         # as matching, which is the opposite of what a verification run means.

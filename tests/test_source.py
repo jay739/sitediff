@@ -1,5 +1,6 @@
 """Integration tests for acquisition, run against a real local HTTP server."""
 
+import json
 import pathlib
 import re
 import sys
@@ -178,3 +179,55 @@ def test_identical_content_from_different_upstream_is_drift(server):
     assert [(c.key, c.left, c.right) for c in result.meta_changes] == [
         ("resolved_ip", "10.0.0.101", "10.0.0.7")
     ]
+
+
+# --- request method and body -------------------------------------------------
+
+class EchoHandler(Handler):
+    """Echoes back what it received, so the request itself can be asserted on."""
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        received = self.rfile.read(length).decode()
+        body = json.dumps({
+            "method": "POST",
+            "received": received,
+            "content_type": self.headers.get("Content-Type", ""),
+        }).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@pytest.fixture(scope="module")
+def echo():
+    srv = HTTPServer(("127.0.0.1", 0), EchoHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield srv.server_address
+    srv.shutdown()
+
+
+def test_post_sends_a_body(echo):
+    host, port = echo
+    src = Source("s", method="POST", body='{"recordId":"1234"}')
+    r = fetch(f"http://{host}:{port}/api", src, EgressPolicy([host]))
+    echoed = json.loads(r.body)
+    assert echoed["method"] == "POST"
+    assert echoed["received"] == '{"recordId":"1234"}'
+
+
+def test_post_defaults_to_json_content_type(echo):
+    host, port = echo
+    src = Source("s", method="POST", body='{"a":1}')
+    r = fetch(f"http://{host}:{port}/api", src, EgressPolicy([host]))
+    assert json.loads(r.body)["content_type"] == "application/json"
+
+
+def test_explicit_content_type_is_not_overridden(echo):
+    host, port = echo
+    src = Source("s", method="POST", body="a=1",
+                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+    r = fetch(f"http://{host}:{port}/api", src, EgressPolicy([host]))
+    assert "form-urlencoded" in json.loads(r.body)["content_type"]
