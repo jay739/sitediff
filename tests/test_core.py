@@ -12,6 +12,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from sitediff.config import Profile, load_profile
 from sitediff.engine import Status, compare, noise_baseline
 from sitediff.errors import (
+    InvalidProfileError,
     PageNotFoundError,
     PageNotRenderedError,
     ProfileNotFoundError,
@@ -245,3 +246,43 @@ def test_bundled_profiles_name_only_reserved_example_domains():
     for p in bundled.glob("*.toml"):
         for host in load_profile(str(p)).egress_policy().allowed:
             assert host.endswith((".example.com", ".example")), f"{p.name}: {host}"
+
+
+def test_unknown_key_is_rejected_with_a_suggestion(tmp_path):
+    """A typo in a security-relevant key must fail loudly, not silently."""
+    profile = tmp_path / "p.toml"
+    profile.write_text('[security]\nallow_host = ["a.example.com"]\n', encoding="utf-8")
+    with pytest.raises(InvalidProfileError) as exc:
+        load_profile(str(profile))
+    assert "allow_host" in str(exc.value)
+    assert "did you mean 'allow_hosts'" in str(exc.value)
+
+
+def test_unknown_source_key_is_rejected(tmp_path):
+    profile = tmp_path / "p.toml"
+    profile.write_text(
+        '[[source]]\nname = "a"\nbase_url = "https://a.example.com"\ntimout = 5\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(InvalidProfileError) as exc:
+        load_profile(str(profile))
+    assert "timeout" in str(exc.value)
+
+
+def test_every_documented_key_is_accepted():
+    """The README reference and the parser must not drift apart."""
+    import re as _re
+
+    from sitediff.config import (
+        COMPARE_KEYS,
+        EXTRACT_KEYS,
+        PROFILE_KEYS,
+        RULE_KEYS,
+        SECURITY_KEYS,
+        SOURCE_KEYS,
+    )
+    readme = (pathlib.Path(__file__).resolve().parent.parent / "README.md").read_text()
+    documented = set(_re.findall(r"^\| `(\w+)` \|", readme, _re.M))
+    known = PROFILE_KEYS | EXTRACT_KEYS | COMPARE_KEYS | SECURITY_KEYS | SOURCE_KEYS | RULE_KEYS
+    missing = known - documented
+    assert not missing, f"undocumented config keys: {sorted(missing)}"

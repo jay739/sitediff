@@ -125,43 +125,123 @@ Only `default` and `example` ship with the package, and both are templates. Copy
 allowlist being versioned in your repo is a feature, since it is a security
 control and benefits from review.
 
+## Configuration reference
+
+Every key the tool accepts is listed below. Anything else is rejected with an
+error naming the closest valid key, so a typo cannot look configured while
+doing nothing.
+
+Only `[[source]].name` is ever required. A profile with no sources compares
+saved HTML files and never touches the network.
+
+### `[profile]`
+
+| Key | Type | Default | Purpose |
+|---|---|---|---|
+| `name` | string | filename stem | Name shown in listings |
+| `description` | string | `""` | One line shown by `sitediff profiles` |
+
+### `[[source]]` (repeatable)
+
+One named endpoint. Reference it on the command line as `name:/path`.
+
+| Key | Type | Default | Purpose |
+|---|---|---|---|
+| `name` | string | **required** | Reference used as `name:/path` |
+| `base_url` | string | `""` | Scheme, host and optional port |
+| `connect_to` | string | `""` | Address to actually connect to, keeping the original `Host` header and TLS SNI. Reaches one region behind a geo-routed name, an origin behind a CDN, or a service by tunnel address |
+| `headers` | table | `{}` | Extra request headers, for example `Authorization` |
+| `timeout` | number | `30.0` | Seconds before a request is abandoned |
+| `verify_tls` | bool | `true` | Set false only for an endpoint expected to present an untrusted certificate |
+| `follow_redirects` | bool | `true` | Follow 3xx responses |
+| `max_redirects` | int | `5` | Hops before giving up |
+
+### `[extract]`
+
+| Key | Type | Default | Purpose |
+|---|---|---|---|
+| `include_selectors` | list | `[]` | CSS selectors to compare. Empty means the whole `<body>` |
+| `exclude_selectors` | list | `[]` | CSS selectors removed before comparison, such as `nav` or `footer` |
+| `render_sentinels` | list | `[]` | Strings meaning the page was captured before rendering finished. A match aborts the run, since diffing a half-rendered page reports every value as missing |
+| `hidden_classes` | list | `hidden`, `hide`, `d-none`, `sr-only`, `visually-hidden`, `screen-reader-only` | Class names that hide content via CSS |
+| `hidden_styles` | list | `display:none`, `visibility:hidden` | Inline style fragments that hide content |
+| `respect_aria_hidden` | bool | `true` | Treat `aria-hidden="true"` as hidden |
+| `noise_tags` | list | `script`, `style`, `noscript`, `template`, `svg`, `path`, `iframe`, `canvas`, `object`, `embed` | Tags removed entirely |
+| `block_tags` | list | the block-level HTML tags | Tags that start a new comparison line. Inline tags such as `span` and `a` are deliberately excluded: treating them as blocks splits one sentence across several lines and separates every value from its label |
+| `parser` | string | `lxml` | BeautifulSoup parser. Falls back to `html.parser` if unavailable |
+
+### `[compare]`
+
+| Key | Type | Default | Purpose |
+|---|---|---|---|
+| `mode` | `values` or `shape` | `values` | `values` when both sides read the same data and any disagreement is a defect. `shape` when they hold different data by design, which masks values and compares labels and structure |
+| `context_lines` | int | `3` | Unchanged lines shown around each change |
+| `ignore_patterns` | list of regex | `[]` | Lines never reported. Use for intentional differences, otherwise one deliberate change is reported on every page and buries the real findings |
+| `headers` | list | `[]` | Response headers compared alongside content, for example `server` |
+
+### `[security]`
+
+| Key | Type | Default | Purpose |
+|---|---|---|---|
+| `allow_hosts` | list | `[]` | Hosts this profile may contact. Hosts named by `[[source]]` are added automatically. A leading dot matches subdomains only, so `.example.com` permits `a.example.com` but not `example.com.attacker.net`. Empty everywhere means no network access at all |
+
+### `[[normalize]]` and `[[redact]]` (repeatable)
+
+`normalize` rewrites lines before comparison, for differences that are real but
+uninteresting, such as absolute URLs that differ by environment. `redact`
+removes sensitive text and runs last, after every other rule, on both page
+content and response metadata.
+
+| Key | Type | Default | Purpose |
+|---|---|---|---|
+| `pattern` | regex | **required** | What to match |
+| `replacement` | string | required for `normalize`, `[REDACTED]` for `redact` | What to substitute |
+| `note` | string | `""` | Why this rule exists |
+
+### Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `SITEDIFF_PROFILES` | Extra profile directories, searched first. Separated by `:` on Linux and macOS, `;` on Windows |
+| `NO_COLOR` | Disable colour output, equivalent to `--no-color` |
+
+### Worked example
+
 ```toml
 [profile]
-name = "homelab-proxy"
+name = "proxy-parity"
 description = "Does the public hostname serve the same thing as the direct address?"
 
 [[source]]
 name = "direct"
-base_url = "http://203.0.113.10:8096"
+base_url = "http://10.0.0.50:8096"
+timeout = 10
 
 [[source]]
 name = "public"
 base_url = "https://app.example.com"
-# Connect to a chosen address while keeping the original Host header and TLS
-# SNI. This is how you reach one region behind a geo-routed hostname, the
-# origin behind a CDN, or a service by tunnel address rather than public name.
 connect_to = "203.0.113.10"
 
 [extract]
 include_selectors = ["main"]
 exclude_selectors = ["nav", "footer"]
-render_sentinels = ["Loading... please wait"]
 
 [compare]
-mode = "values"          # or "shape" when the sides hold different data
-context_lines = 3
+mode = "values"
 headers = ["server", "content-type"]
 ignore_patterns = ["All rights reserved"]
 
 [[normalize]]
 pattern = 'https?://[A-Za-z0-9.-]+(:\d+)?'
 replacement = '{origin}'
+note = "absolute URLs differ by design between the two paths"
 
 [security]
-allow_hosts = [".jay739.dev", "203.0.113.10"]
+allow_hosts = [".example.com", "10.0.0.50", "203.0.113.10"]
 
 [[redact]]
 pattern = '(?i)(api[_-]?key|token|password|secret)["\s:=]+\S+'
+note = "diff reports become CI artifacts"
 ```
 
 ### Response metadata

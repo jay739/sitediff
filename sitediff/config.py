@@ -6,6 +6,7 @@ so a team can check one into their own repo and hand it to this tool.
 
 from __future__ import annotations
 
+import difflib
 import os
 import re
 import sys
@@ -167,6 +168,42 @@ class Profile:
         return replace(self, **clean) if clean else self
 
 
+PROFILE_KEYS = {"name", "description"}
+EXTRACT_KEYS = {
+    "noise_tags", "block_tags", "hidden_styles", "hidden_classes",
+    "respect_aria_hidden", "include_selectors", "exclude_selectors", "parser",
+    "render_sentinels",
+}
+COMPARE_KEYS = {"mode", "context_lines", "ignore_patterns", "headers"}
+SECURITY_KEYS = {"allow_hosts"}
+SOURCE_KEYS = {
+    "name", "base_url", "connect_to", "headers", "timeout", "verify_tls",
+    "max_redirects", "follow_redirects",
+}
+RULE_KEYS = {"pattern", "replacement", "note"}
+
+
+def _reject_unknown(mapping: dict, allowed: set[str], path: str, where: str) -> None:
+    """Fail on keys this tool does not recognise.
+
+    Silently ignoring a typo is worse than erroring: a misspelled key in a
+    profile looks configured but does nothing, and these keys include the
+    egress allowlist and the redaction rules.
+    """
+    unknown = sorted(set(mapping) - allowed)
+    if not unknown:
+        return
+    hints = []
+    for key in unknown:
+        close = difflib.get_close_matches(key, sorted(allowed), n=1, cutoff=0.6)
+        hints.append(f"{key!r}" + (f" (did you mean {close[0]!r}?)" if close else ""))
+    raise InvalidProfileError(
+        path,
+        f"unknown key(s) in {where}: {', '.join(hints)}\n"
+        f"Recognised keys: {', '.join(sorted(allowed))}",
+    )
+
+
 def _compile(patterns, path: str, key: str) -> list[re.Pattern]:
     out = []
     for p in patterns:
@@ -221,6 +258,7 @@ def load_profile(source: str | Path | None) -> Profile:
 
     extract = data.get("extract", {})
     compare = data.get("compare", {})
+    security = data.get("security", {})
 
     known_sections = {"profile", "extract", "compare", "normalize",
                       "redact", "security", "source"}
@@ -235,6 +273,7 @@ def load_profile(source: str | Path | None) -> Profile:
     def parse_rules(section: str) -> list[Rule]:
         out = []
         for i, raw in enumerate(data.get(section, [])):
+            _reject_unknown(raw, RULE_KEYS, path, f"[[{section}]] entry {i}")
             if "pattern" not in raw:
                 raise InvalidProfileError(
                     path, f"[[{section}]] entry {i} needs a 'pattern'")
@@ -250,6 +289,7 @@ def load_profile(source: str | Path | None) -> Profile:
 
     sources: dict[str, Source] = {}
     for i, raw in enumerate(data.get("source", [])):
+        _reject_unknown(raw, SOURCE_KEYS, path, f"[[source]] entry {i}")
         if "name" not in raw:
             raise InvalidProfileError(path, f"[[source]] entry {i} needs a 'name'")
         if raw["name"] in sources:
@@ -273,6 +313,11 @@ def load_profile(source: str | Path | None) -> Profile:
             path,
             f"compare.mode must be one of {[m.value for m in Mode]}, got {mode_raw!r}",
         ) from None
+
+    _reject_unknown(data.get("profile", {}), PROFILE_KEYS, path, "[profile]")
+    _reject_unknown(extract, EXTRACT_KEYS, path, "[extract]")
+    _reject_unknown(compare, COMPARE_KEYS, path, "[compare]")
+    _reject_unknown(security, SECURITY_KEYS, path, "[security]")
 
     rules = []
     for i, raw in enumerate(data.get("normalize", [])):
@@ -321,7 +366,7 @@ def load_profile(source: str | Path | None) -> Profile:
         mode=mode,
         sources=sources,
         allow_hosts=_require_list_of_str(
-            data.get("security", {}).get("allow_hosts", []), path, "security.allow_hosts"),
+            security.get("allow_hosts", []), path, "security.allow_hosts"),
         redact=parse_rules("redact"),
         compare_headers=_require_list_of_str(
             compare.get("headers", []), path, "compare.headers",
