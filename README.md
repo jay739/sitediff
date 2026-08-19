@@ -193,6 +193,8 @@ One named endpoint. Reference it on the command line as `name:/path`.
 | Key | Type | Default | Purpose |
 |---|---|---|---|
 | `name` | string | **required** | Reference used as `name:/path` |
+| `capture` | `static`, `hydration`, `json`, `browser` | `static` | How values are obtained. Run `sitediff probe` to find out which this site needs |
+| `hydration_marker` | string | `""` | Name a specific embedded payload (`__NEXT_DATA__`, `__NUXT__`) when a page carries several |
 | `base_url` | string | `""` | Scheme, host and optional port |
 | `connect_to` | string | `""` | Address to actually connect to, keeping the original `Host` header and TLS SNI. Reaches one region behind a geo-routed name, an origin behind a CDN, or a service by tunnel address |
 | `headers` | table | `{}` | Extra request headers, for example `Authorization` |

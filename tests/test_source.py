@@ -96,6 +96,18 @@ def test_connect_to_override_needs_its_own_authorisation(server):
         fetch(local(server), src, allow(server))
 
 
+def test_trailing_dot_forms_match_their_allowlist_entry():
+    """A trailing dot is the absolute form of a hostname, not a different host.
+
+    Entries and queried hosts must normalise the same way, or an allowlist
+    silently fails to match the host it names.
+    """
+    assert EgressPolicy(["a.example.com."]).permits("a.example.com")
+    assert EgressPolicy(["a.example.com"]).permits("a.example.com.")
+    assert EgressPolicy([".example.com."]).permits("a.example.com")
+    assert not EgressPolicy(["."]).permits("anything.com")
+
+
 def test_suffix_match_does_not_allow_lookalike_domains():
     """A leading dot matches subdomains and the apex, never a lookalike that
     merely starts with the allowed name."""

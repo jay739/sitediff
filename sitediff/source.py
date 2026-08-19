@@ -43,10 +43,18 @@ class EgressPolicy:
     """
 
     def __init__(self, allowed: list[str] | None = None):
-        self.allowed = [a.strip().lower() for a in (allowed or []) if a.strip()]
+        # Entries and queried hosts must normalise identically. A trailing dot
+        # is the valid absolute form of a hostname, so an entry carrying one
+        # would otherwise fail to match its own host. Only the trailing dot is
+        # stripped: a leading dot is the suffix-match marker and is meaningful.
+        self.allowed = [n for n in (self._normalise(a) for a in (allowed or [])) if n]
+
+    @staticmethod
+    def _normalise(host: str) -> str:
+        return host.strip().lower().rstrip(".")
 
     def permits(self, host: str) -> bool:
-        host = host.strip().lower().rstrip(".")
+        host = self._normalise(host)
         for entry in self.allowed:
             if entry.startswith("."):
                 if host.endswith(entry) or host == entry[1:]:
@@ -75,6 +83,10 @@ class Source:
     verify_tls: bool = True
     max_redirects: int = DEFAULT_MAX_REDIRECTS
     follow_redirects: bool = True
+    # Str rather than the Capture enum, to keep this module free of imports
+    # from the layers above it. config validates the value.
+    capture: str = "static"
+    hydration_marker: str = ""
 
     def url_for(self, path: str = "") -> str:
         if not path:

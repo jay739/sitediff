@@ -16,12 +16,14 @@ from urllib.parse import urlparse
 from rich.text import Text
 
 from . import __version__
+from .capture import Capture, Kind, from_html, from_response
 from .config import Profile, discover_profiles, load_profile, profile_search_path
-from .engine import Status, compare, noise_baseline
-from .errors import SiteDiffError
-from .extract import Page, extract, extract_html
+from .engine import Status, compare, compare_structured, noise_baseline
+from .errors import MixedPayloadError, SiteDiffError
+from .extract import Page, extract_html, read_html
 from .render import (
     make_console,
+    render_fields,
     render_probe,
     render_side_by_side,
     render_summary,
@@ -58,6 +60,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="compare even if a page still shows a loading placeholder")
     cmp_p.add_argument("--no-color", action="store_true", help="disable colour output")
     cmp_p.add_argument("-q", "--quiet", action="store_true", help="summary only, no diff body")
+    cmp_p.add_argument("--capture", choices=[c.value for c in Capture], default="",
+                       help="override the capture strategy for both sides")
 
     ex_p = sub.add_parser("extract", help="show the visible lines pulled from one page")
     ex_p.add_argument("page")
@@ -83,24 +87,31 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def resolve_side(token: str, profile: Profile, side: str, allow_unrendered: bool) -> Page:
-    """Turn one command line argument into an extracted page.
+def resolve_payload(token: str, profile: Profile, side: str,
+                    override: str = "") -> object:
+    """Turn one command line argument into a capture payload.
 
     Accepted forms, in order: an explicit URL, a `sourcename:/path` reference
-    into the profile, or a path to a saved HTML file.
+    into the profile, or a path to a saved file.
     """
+    headers = profile.compare_headers
+
     if token.startswith(("http://", "https://")):
+        capture = Capture(override or Capture.STATIC.value)
         response = fetch_url(token, profile)
-        return _page_from_response(response, token, profile, side, allow_unrendered)
+        return from_response(response, capture, token, headers=headers)
 
     match = SOURCE_REF.match(token)
     if match and match.group("name") in profile.sources:
         source = profile.source(match.group("name"))
         url = source.url_for(match.group("path") or "")
+        capture = Capture(override or source.capture)
         response = fetch(url, source, profile.egress_policy())
-        return _page_from_response(response, url, profile, side, allow_unrendered)
+        return from_response(response, capture, url,
+                             marker=source.hydration_marker, headers=headers)
 
-    return extract(token, profile, side=side, allow_unrendered=allow_unrendered)
+    capture = Capture(override or Capture.STATIC.value)
+    return from_html(read_html(token), capture, token)
 
 
 def fetch_url(url: str, profile: Profile):
@@ -116,27 +127,37 @@ def fetch_url(url: str, profile: Profile):
     return fetch(url, Source(name="cli", base_url=url), policy)
 
 
-def _page_from_response(response, url, profile, side, allow_unrendered) -> Page:
-    return extract_html(
-        response.body, profile, side=side, label=url,
-        allow_unrendered=allow_unrendered,
-        meta=response.metadata(profile.compare_headers),
-    )
+def _as_page(payload, profile: Profile, side: str, allow_unrendered: bool) -> Page:
+    if payload.kind is Kind.TEXT:
+        return extract_html(payload.html, profile, side=side, label=payload.label,
+                            allow_unrendered=allow_unrendered, meta=payload.meta)
+    # Structured payloads carry no lines; the Page exists to hold identity and
+    # response metadata so both comparison paths report them the same way.
+    return Page(path=payload.label, side=side, lines=[], meta=payload.meta)
 
 
 def cmd_compare(args) -> int:
     profile = load_profile(args.profile).with_overrides(context_lines=args.context)
     console = make_console(no_color=args.no_color)
 
-    left = resolve_side(args.left, profile, "left", args.allow_unrendered)
-    right = resolve_side(args.right, profile, "right", args.allow_unrendered)
+    left_payload = resolve_payload(args.left, profile, "left", args.capture)
+    right_payload = resolve_payload(args.right, profile, "right", args.capture)
+    if left_payload.kind is not right_payload.kind:
+        raise MixedPayloadError(left_payload.kind.value, right_payload.kind.value)
+
+    for payload in (left_payload, right_payload):
+        for note in payload.notes:
+            console.print(Text(f"  note: {note}", style="yellow"))
+
+    left = _as_page(left_payload, profile, "left", args.allow_unrendered)
+    right = _as_page(right_payload, profile, "right", args.allow_unrendered)
 
     noise = None
     if args.baseline:
-        a = extract(args.baseline[0], profile, side="baseline A",
-                    allow_unrendered=args.allow_unrendered)
-        b = extract(args.baseline[1], profile, side="baseline B",
-                    allow_unrendered=args.allow_unrendered)
+        a = _as_page(resolve_payload(args.baseline[0], profile, "baseline A", args.capture),
+                     profile, "baseline A", args.allow_unrendered)
+        b = _as_page(resolve_payload(args.baseline[1], profile, "baseline B", args.capture),
+                     profile, "baseline B", args.allow_unrendered)
         noise = noise_baseline(a, b)
         if noise:
             console.print(
@@ -147,11 +168,17 @@ def cmd_compare(args) -> int:
         else:
             console.print("  Baseline is stable: the capture is reproducible.", style="green")
 
-    result = compare(left, right, profile, noise=noise)
+    if left_payload.kind is Kind.DATA:
+        result = compare_structured(left, right, profile,
+                                    left_payload.data, right_payload.data)
+    else:
+        result = compare(left, right, profile, noise=noise)
 
     render_summary(result, console)
     if not args.quiet:
-        if args.side_by_side:
+        if left_payload.kind is Kind.DATA:
+            render_fields(result, console)
+        elif args.side_by_side:
             render_side_by_side(result, console)
         else:
             render_unified(result, console)
@@ -167,7 +194,8 @@ def cmd_compare(args) -> int:
 def cmd_extract(args) -> int:
     profile = load_profile(args.profile)
     console = make_console()
-    page = extract(args.page, profile, side="page", allow_unrendered=args.allow_unrendered)
+    page = _as_page(resolve_payload(args.page, profile, "page"), profile, "page",
+                    args.allow_unrendered)
     width = len(str(len(page.lines)))
     for i, line in enumerate(page.lines, 1):
         console.print(f"[dim cyan]{i:>{width}}[/] {line}" if args.numbers else line,
@@ -178,7 +206,8 @@ def cmd_extract(args) -> int:
 def cmd_fetch(args) -> int:
     profile = load_profile(args.profile)
     console = make_console()
-    page = resolve_side(args.target, profile, "page", allow_unrendered=True)
+    payload = resolve_payload(args.target, profile, "page")
+    page = _as_page(payload, profile, "page", allow_unrendered=True)
 
     console.print()
     console.print(f"  [bold]{page.path}[/]")
@@ -214,7 +243,6 @@ def cmd_probe(args) -> int:
             response = fetch(url, source, profile.egress_policy())
             html = response.body
         else:
-            from .extract import read_html
             url, html = args.target, read_html(args.target)
 
     report = probe(html, url, profile, response)

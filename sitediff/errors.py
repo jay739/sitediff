@@ -138,3 +138,28 @@ class SourceNotFoundError(ConfigError):
             f"No source named {name!r} in this profile.\nDefined sources: {available}\n"
             f"Add one with a [[source]] block, or pass a file path instead."
         )
+
+
+class CaptureError(SiteDiffError):
+    """A capture strategy could not produce a comparable payload."""
+
+
+class UnsupportedCaptureError(CaptureError):
+    def __init__(self, name: str):
+        self.name = name
+        super().__init__(
+            f"Capture strategy {name!r} is not available in this install.\n"
+            f"Browser capture needs the optional extra: pip install 'sitediff[browser]'.\n"
+            f"Most sites do not need it. Run 'sitediff probe' against the page: if it "
+            f"reports static, hydration or json, no browser is required."
+        )
+
+
+class MixedPayloadError(SiteDiffError):
+    def __init__(self, left: str, right: str):
+        super().__init__(
+            f"Cannot compare a {left} payload against a {right} one.\n"
+            f"Both sides must capture the same kind: either both structured "
+            f"(json, hydration) or both text (static). Adjust 'capture' on one "
+            f"of the sources so the two agree."
+        )

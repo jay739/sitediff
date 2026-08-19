@@ -24,7 +24,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.6"]
+# Browser capture is a last resort, needed only by sites that expose their
+# values neither in the HTML, nor as embedded state, nor via a data endpoint.
+# Keeping it optional means the base install stays three reviewable packages.
+browser = ["playwright>=1.45"]
 
 [project.scripts]
 sitediff = "sitediff.cli:main"

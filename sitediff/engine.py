@@ -19,6 +19,9 @@ class Op(StrEnum):
     EQUAL = "equal"
     ADD = "add"
     REMOVE = "remove"
+    # Structured comparison only: the field exists on both sides but its value
+    # moved. Text diffs express the same thing as a remove plus an add.
+    ALTER = "alter"
 
 
 class Status(StrEnum):
@@ -75,16 +78,22 @@ class DiffResult:
     similarity: float = 1.0
     mode: Mode = Mode.VALUES
     meta_changes: list[MetaChange] = field(default_factory=list)
+    field_changes: list[FieldChange] = field(default_factory=list)
+    altered: int = 0
+
+    @property
+    def structured(self) -> bool:
+        return bool(self.field_changes) or self.altered > 0
 
     @property
     def status(self) -> Status:
-        if self.added or self.removed or self.meta_changes:
+        if self.added or self.removed or self.altered or self.meta_changes:
             return Status.DRIFT
         return Status.CLEAN
 
     @property
     def changed(self) -> int:
-        return self.added + self.removed
+        return self.added + self.removed + self.altered
 
 
 # In shape mode the two sides read different databases, so every value differs
@@ -296,4 +305,102 @@ def compare(
                     result.added += 1
         result.hunks.append(hunk)
 
+    return result
+
+
+# --- structured comparison ---------------------------------------------------
+#
+# When a capture yields data rather than markup, comparing field by field beats
+# diffing a rendering of it. A finding then names the field that moved, which is
+# what someone verifying a migration actually needs, instead of a hunk to read.
+
+
+@dataclass(frozen=True)
+class FieldChange:
+    path: str
+    op: Op
+    left: str = ""
+    right: str = ""
+
+
+MAX_FLATTEN_DEPTH = 40
+
+
+def flatten(data: object, prefix: str = "", depth: int = 0) -> dict[str, str]:
+    """Reduce nested data to a flat map of dotted paths to scalar values.
+
+    Lists are indexed positionally. That is deliberate: for two renderings of
+    the same record, a row moving position is itself a finding worth reporting,
+    not something to normalise away silently.
+    """
+    if depth > MAX_FLATTEN_DEPTH:
+        return {prefix or "<root>": "<max depth exceeded>"}
+
+    out: dict[str, str] = {}
+    if isinstance(data, dict):
+        for key, value in data.items():
+            child = f"{prefix}.{key}" if prefix else str(key)
+            out.update(flatten(value, child, depth + 1))
+    elif isinstance(data, (list, tuple)):
+        for i, value in enumerate(data):
+            out.update(flatten(value, f"{prefix}[{i}]", depth + 1))
+    else:
+        key = prefix or "<root>"
+        out[key] = "" if data is None else str(data)
+    return out
+
+
+def compare_structured(
+    left: Page,
+    right: Page,
+    profile: Profile,
+    left_data: object,
+    right_data: object,
+) -> DiffResult:
+    """Diff two structured payloads field by field."""
+    left_flat = flatten(left_data)
+    right_flat = flatten(right_data)
+
+    ignored = 0
+    if profile.ignore_patterns:
+        def keep(path: str) -> bool:
+            return not any(p.search(path) for p in profile.ignore_patterns)
+
+        before = len(left_flat) + len(right_flat)
+        left_flat = {k: v for k, v in left_flat.items() if keep(k)}
+        right_flat = {k: v for k, v in right_flat.items() if keep(k)}
+        ignored = before - (len(left_flat) + len(right_flat))
+
+    shape = profile.mode is Mode.SHAPE
+    changes: list[FieldChange] = []
+    same = 0
+
+    for path in sorted(set(left_flat) | set(right_flat)):
+        in_left, in_right = path in left_flat, path in right_flat
+        a, b = left_flat.get(path, ""), right_flat.get(path, "")
+
+        if in_left and not in_right:
+            changes.append(FieldChange(path, Op.REMOVE, a, ""))
+        elif in_right and not in_left:
+            changes.append(FieldChange(path, Op.ADD, "", b))
+        elif shape or a == b:
+            # In shape mode the sides hold different data on purpose, so a field
+            # present on both is agreement regardless of its value.
+            same += 1
+        else:
+            changes.append(FieldChange(path, Op.ALTER, a, b))
+
+    total = len(changes) + same
+    result = DiffResult(
+        left=left,
+        right=right,
+        ignored=ignored,
+        mode=profile.mode,
+        meta_changes=_compare_meta(left, right),
+        similarity=(same / total) if total else 1.0,
+    )
+    result.field_changes = changes
+    result.removed = sum(1 for c in changes if c.op is Op.REMOVE)
+    result.added = sum(1 for c in changes if c.op is Op.ADD)
+    result.altered = sum(1 for c in changes if c.op is Op.ALTER)
     return result

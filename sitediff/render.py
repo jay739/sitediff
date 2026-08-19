@@ -119,6 +119,9 @@ def render_summary(result: DiffResult, console: Console) -> None:
     body.append(f"+{result.added}", style="diff.add")
     body.append(" / ")
     body.append(f"-{result.removed}", style="diff.remove")
+    if result.structured:
+        body.append(" / ")
+        body.append(f"~{result.altered}", style="status.drift")
     body.append(f"   {result.similarity:.1%} similar", style="meta.key")
 
     if result.mode is Mode.SHAPE:
@@ -300,4 +303,39 @@ def render_probe(report, console: Console) -> None:
     console.print(f"    {'visible text':<16} {report.visible_chars:,} chars "
                   f"of {report.html_bytes:,} bytes ({report.text_ratio:.1%})")
     console.print(f"    {'external scripts':<16} {len(report.scripts)}")
+    console.print()
+
+
+def render_fields(result: DiffResult, console: Console) -> None:
+    """Present a structured diff as the fields that moved."""
+    from .engine import Op
+
+    if not result.field_changes:
+        console.print("\n  No field differences.\n", style="status.clean")
+        return
+
+    table = Table(show_lines=False, expand=True, padding=(0, 1), box=None)
+    table.add_column("", width=3)
+    table.add_column("field", overflow="fold", ratio=2)
+    table.add_column("left", overflow="fold", ratio=2)
+    table.add_column("right", overflow="fold", ratio=2)
+
+    symbols = {Op.REMOVE: ("-", "diff.remove"), Op.ADD: ("+", "diff.add"),
+               Op.ALTER: ("~", "status.drift")}
+
+    for change in result.field_changes:
+        symbol, style = symbols[change.op]
+        left = change.left if change.op is not Op.ADD else ""
+        right = change.right if change.op is not Op.REMOVE else ""
+        table.add_row(
+            Text(symbol, style=style),
+            Text(change.path, style=style),
+            Text(left or ("(absent)" if change.op is Op.ADD else "(empty)"),
+                 style="diff.remove" if left else "dim"),
+            Text(right or ("(absent)" if change.op is Op.REMOVE else "(empty)"),
+                 style="diff.add" if right else "dim"),
+        )
+
+    console.print()
+    console.print(table)
     console.print()

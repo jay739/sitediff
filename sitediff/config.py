@@ -16,6 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .capture import Capture
 from .errors import InvalidProfileError, ProfileNotFoundError, SourceNotFoundError
 from .source import DEFAULT_MAX_REDIRECTS, DEFAULT_TIMEOUT, EgressPolicy, Source
 
@@ -178,7 +179,7 @@ COMPARE_KEYS = {"mode", "context_lines", "ignore_patterns", "headers"}
 SECURITY_KEYS = {"allow_hosts"}
 SOURCE_KEYS = {
     "name", "base_url", "connect_to", "headers", "timeout", "verify_tls",
-    "max_redirects", "follow_redirects",
+    "max_redirects", "follow_redirects", "capture", "hydration_marker",
 }
 RULE_KEYS = {"pattern", "replacement", "note"}
 
@@ -294,8 +295,20 @@ def load_profile(source: str | Path | None) -> Profile:
             raise InvalidProfileError(path, f"[[source]] entry {i} needs a 'name'")
         if raw["name"] in sources:
             raise InvalidProfileError(path, f"duplicate source name {raw['name']!r}")
+        capture_raw = raw.get("capture", Capture.STATIC.value)
+        try:
+            capture_mode = Capture(capture_raw)
+        except ValueError:
+            raise InvalidProfileError(
+                path,
+                f"source {raw['name']!r}: capture must be one of "
+                f"{[c.value for c in Capture]}, got {capture_raw!r}",
+            ) from None
+
         sources[raw["name"]] = Source(
             name=raw["name"],
+            capture=capture_mode,
+            hydration_marker=raw.get("hydration_marker", ""),
             base_url=raw.get("base_url", ""),
             connect_to=raw.get("connect_to", ""),
             headers=raw.get("headers", {}),
