@@ -62,8 +62,11 @@ def test_bracketed_profile_keys_survive_the_markup_parser(capsys):
     try:
         code, _, err = run(capsys, "compare", LEGACY, OPTIMISED, "-p", str(profile))
         assert code == EXIT_ERROR
-        assert "[security]" in err
-        assert "did you mean 'allow_hosts'" in err
+        # The console wraps to terminal width, and a Windows temp path is long
+        # enough to split the message, so compare on collapsed whitespace.
+        flat = " ".join(err.split())
+        assert "[security]" in flat
+        assert "did you mean 'allow_hosts'" in flat
     finally:
         profile.unlink()
 
@@ -322,7 +325,7 @@ def test_docs_document_every_command():
 
     from sitediff.cli import build_parser
     docs = (pathlib.Path(__file__).resolve().parent.parent
-            / "docs" / "commands.md").read_text()
+            / "docs" / "commands.md").read_text(encoding="utf-8")
     subparsers = next(a for a in build_parser()._actions
                       if isinstance(a, _argparse._SubParsersAction))
     seen, missing = set(), []
@@ -338,7 +341,7 @@ def test_docs_document_every_command():
 def test_command_docs_have_no_empty_tables():
     """A command with no options should say so, not render a bare table header."""
     docs = (pathlib.Path(__file__).resolve().parent.parent
-            / "docs" / "commands.md").read_text()
+            / "docs" / "commands.md").read_text(encoding="utf-8")
     lines = docs.splitlines()
     for i, line in enumerate(lines[:-2]):
         if line.startswith("| Flag | Purpose |"):
@@ -349,7 +352,7 @@ def test_command_docs_have_no_empty_tables():
 
 def test_readme_links_to_every_doc():
     root = pathlib.Path(__file__).resolve().parent.parent
-    readme = (root / "README.md").read_text()
+    readme = (root / "README.md").read_text(encoding="utf-8")
     for doc in sorted((root / "docs").glob("*.md")):
         assert f"docs/{doc.name}" in readme, f"README does not link to {doc.name}"
 
@@ -357,4 +360,4 @@ def test_readme_links_to_every_doc():
 def test_docs_link_back_to_the_readme():
     root = pathlib.Path(__file__).resolve().parent.parent
     for doc in sorted((root / "docs").glob("*.md")):
-        assert "../README.md" in doc.read_text(), f"{doc.name} has no way back"
+        assert "../README.md" in doc.read_text(encoding="utf-8"), f"{doc.name} has no way back"

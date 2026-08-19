@@ -55,4 +55,10 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "RUF"]
+# PLW1514 catches read_text/open without an explicit encoding. That only fails
+# on Windows, where the locale codec is not UTF-8, so it is invisible locally
+# until the CI matrix runs. It is a preview rule, hence the opt-in below, which
+# enables that rule alone rather than the whole preview set.
+preview = true
+explicit-preview-rules = true
+select = ["E", "F", "W", "I", "UP", "B", "RUF", "PLW1514"]

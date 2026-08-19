@@ -283,7 +283,7 @@ def test_every_documented_key_is_accepted():
     )
     # The configuration reference lives in docs/, so that is what must not drift.
     docs = (pathlib.Path(__file__).resolve().parent.parent
-            / "docs" / "configuration.md").read_text()
+            / "docs" / "configuration.md").read_text(encoding="utf-8")
     documented = set(_re.findall(r"^\| `(\w+)` \|", docs, _re.M))
     known = PROFILE_KEYS | EXTRACT_KEYS | COMPARE_KEYS | SECURITY_KEYS | SOURCE_KEYS | RULE_KEYS
     missing = known - documented
