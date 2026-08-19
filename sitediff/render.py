@@ -322,8 +322,11 @@ def render_run(report, console: Console, show: int = 25) -> None:
     body = Text()
     body.append("profile   ", style="meta.key")
     body.append(f"{report.profile}\n", style="meta.value")
+    pages = report.by_page()
     body.append("entities  ", style="meta.key")
-    body.append(f"{total}", style="meta.value")
+    body.append(f"{report.entities}", style="meta.value")
+    if len(pages) > 1:
+        body.append(f" x {len(pages)} pages = {total} comparisons", style="meta.key")
     body.append(f"  in {report.seconds:.1f}s\n\n", style="meta.key")
 
     body.append("clean  ", style="meta.key")
@@ -338,8 +341,21 @@ def render_run(report, console: Console, show: int = 25) -> None:
     if report.discovery_failures:
         body.append(f"\n{len(report.discovery_failures)} discovery page(s) failed",
                     style="diff.remove")
+    if len(pages) > 1:
+        body.append("\n\n")
+        width = max(len(name) for name in pages)
+        for name, tally in sorted(pages.items()):
+            body.append(f"  {name:<{width}}  ", style="meta.key")
+            body.append(f"{tally['clean']} clean", style="status.clean")
+            body.append("  ")
+            body.append(f"{tally['drift']} drift",
+                        style="status.drift" if tally["drift"] else "meta.key")
+            body.append("  ")
+            body.append(f"{tally['error']} failed",
+                        style="diff.remove" if tally["error"] else "meta.key")
+            body.append("\n")
     if report.run_id is not None:
-        body.append(f"\n\nrun #{report.run_id} stored in {report.db_path}",
+        body.append(f"\nrun #{report.run_id} stored in {report.db_path}",
                     style="meta.key")
 
     console.print(Panel(body, title="sitediff run", border_style="cyan", expand=False))
@@ -351,6 +367,7 @@ def render_run(report, console: Console, show: int = 25) -> None:
 
     table = Table(show_lines=False, expand=True, padding=(0, 1), box=None)
     table.add_column("entity", ratio=1, overflow="fold")
+    table.add_column("page", ratio=1, overflow="fold")
     table.add_column("status", width=8)
     table.add_column("+/-/~", width=12)
     table.add_column("detail", ratio=4, overflow="fold")
@@ -361,6 +378,7 @@ def render_run(report, console: Console, show: int = 25) -> None:
                   else f"+{result.added} -{result.removed} ~{result.altered}")
         table.add_row(
             Text(result.key, style=style),
+            Text(result.page, style="meta.key"),
             Text(result.status, style=style),
             Text(counts, style="meta.key"),
             Text(result.detail[:400] or "-", style="dim"),

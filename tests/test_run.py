@@ -17,7 +17,14 @@ from sitediff.config import Profile, load_profile
 from sitediff.engine import Status, compare_structured
 from sitediff.errors import InvalidProfileError, PairingError
 from sitediff.extract import Page
-from sitediff.pair import Crawl, PairPlan, crawl_keys, discover_keys, parse_pair
+from sitediff.pair import (
+    Crawl,
+    PagePlan,
+    PairPlan,
+    crawl_keys,
+    discover_keys,
+    parse_pair,
+)
 from sitediff.run import execute, recent_runs
 from sitediff.source import EgressPolicy
 from sitediff.source import Source as HttpSource
@@ -442,3 +449,78 @@ def test_discovery_records_named_fields_per_key(profile):
     found = discover_keys(plan, profile.sources, profile.egress_policy())
     assert sorted(found.keys) == sorted(SCHOOLS)
     assert found.context(found.keys[0])["lea"] == "01"
+
+
+# --- several pages per entity ------------------------------------------------
+
+def test_shorthand_and_page_blocks_are_equivalent_for_one_page():
+    shorthand = parse_pair({"pair": {
+        "left": "a", "right": "b", "left_path": "/l/{key}", "right_path": "/r/{key}",
+        "keys": ["1"]}}, "p.toml")
+    explicit = parse_pair({"pair": {
+        "left": "a", "right": "b", "keys": ["1"],
+        "page": [{"name": "page", "left_path": "/l/{key}", "right_path": "/r/{key}"}]}},
+        "p.toml")
+    assert shorthand.comparisons == explicit.comparisons == 1
+    assert shorthand.pages[0].left_path == explicit.pages[0].left_path
+
+
+def test_a_directly_constructed_plan_still_has_a_page():
+    """Building a plan in code must behave like the parsed shorthand, or a run
+    silently compares nothing."""
+    plan = PairPlan(left="a", right="b", left_path="/l/{key}", right_path="/r/{key}")
+    assert plan.comparisons == 1
+    assert plan.configured
+
+
+def test_page_blocks_and_top_level_paths_cannot_be_mixed():
+    with pytest.raises(InvalidProfileError) as exc:
+        parse_pair({"pair": {
+            "left": "a", "right": "b", "left_path": "/l/{key}", "right_path": "/r/{key}",
+            "keys": ["1"],
+            "page": [{"name": "x", "left_path": "/x/{key}", "right_path": "/y/{key}"}]}},
+            "p.toml")
+    assert "one or the other" in str(exc.value)
+
+
+def test_duplicate_page_names_are_rejected():
+    with pytest.raises(InvalidProfileError) as exc:
+        parse_pair({"pair": {"left": "a", "right": "b", "keys": ["1"], "page": [
+            {"name": "rc", "left_path": "/a/{key}", "right_path": "/b/{key}"},
+            {"name": "rc", "left_path": "/c/{key}", "right_path": "/d/{key}"}]}},
+            "p.toml")
+    assert "duplicate page name" in str(exc.value)
+
+
+def test_run_covers_every_page_of_every_entity(profile, tmp_path):
+    plan = PairPlan(left="legacy", right="rewrite", keys=tuple(SCHOOLS), workers=1,
+                    pages=(PagePlan("a", "/api?id={key}", "/api?id={key}"),
+                           PagePlan("b", "/api?id={key}", "/api?id={key}")))
+    store = AcceptStore(path=tmp_path / "acc.toml")
+    report = execute(profile, plan, store, db_path=tmp_path / "r.db")
+    assert len(report.results) == len(SCHOOLS) * 2
+    assert report.entities == len(SCHOOLS)
+    assert set(report.by_page()) == {"a", "b"}
+
+
+def test_results_are_keyed_by_entity_and_page(profile, tmp_path):
+    plan = PairPlan(left="legacy", right="rewrite", keys=("4001",), workers=1,
+                    pages=(PagePlan("a", "/api?id={key}", "/api?id={key}"),
+                           PagePlan("b", "/api?id={key}", "/api?id={key}")))
+    store = AcceptStore(path=tmp_path / "acc.toml")
+    db = tmp_path / "r.db"
+    execute(profile, plan, store, db_path=db)
+    import sqlite3
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute("SELECT key, page FROM results ORDER BY page").fetchall()
+    assert rows == [("4001", "a"), ("4001", "b")]
+
+
+def test_page_can_override_the_request_body():
+    """A dispatching backend picks the view from a payload parameter, so each
+    page needs its own body rather than the source's."""
+    page = PagePlan("rc", "/x?id={key}", "/y/{key}",
+                    left_body="Call=GetRecord&ID={key}")
+    left, right = page.bodies({"key": "1234"})
+    assert left == "Call=GetRecord&ID=1234"
+    assert right == ""

@@ -155,6 +155,47 @@ Keys come from one of three places, in order of preference:
 site cannot be crawled at all (hash routing, JavaScript navigation) while still
 exposing a perfectly ordinary index.
 
+### Several pages per entity
+
+An entity is rarely one page. A school has a report card, a demographics view,
+an assessments view and more, and each needs comparing. Declare them and every
+entity is compared on every page:
+
+```toml
+[pair]
+left = "legacy"
+right = "rewrite"
+
+[[pair.page]]
+name = "report-card"
+left_path = "/Main/Dispatch"
+right_path = "/school/{key}/report-card"
+left_body = "FILTERS=1/{span}/1/{lea}/{key}/0&Call=GetRecordDetail"
+
+[[pair.page]]
+name = "demographics"
+left_path = "/Main/Dispatch"
+right_path = "/school/{key}/demographics"
+left_body = "FILTERS=1/{span}/1/{lea}/{key}/0&Call=GetDemographics"
+```
+
+`left_body` and `right_body` exist because a dispatching backend often selects
+the view from a payload parameter rather than from the path, so the URL alone
+cannot distinguish one page from another.
+
+Results are keyed by entity **and** page, and both the terminal and the report
+break the totals down per page, since a flat number hides which view regressed:
+
+```
+entities  1,412 x 6 pages = 8,472 comparisons  in 214s
+  report-card    1,410 clean   2 drift   0 failed
+  demographics   1,412 clean   0 drift   0 failed
+  mcap           1,398 clean  14 drift   0 failed
+```
+
+Comparing a single page per entity needs no page list; `left_path` and
+`right_path` directly under `[pair]` still work.
+
 ### Entities identified by more than one value
 
 An entity is not always addressed by a single id. A Example State school needs both a
@@ -386,10 +427,22 @@ Required only for `sitediff run`. `sitediff compare` needs none of it.
 | Key | Type | Default | Purpose |
 |---|---|---|---|
 | `left` / `right` | string | **required** | Source names for the two sides |
-| `left_path` / `right_path` | string | **required** | URL templates, each containing `{key}` |
+| `left_path` / `right_path` | string | required unless `[[pair.page]]` is used | URL templates, each containing `{key}` |
+| `left_body` / `right_body` | string | `""` | Request bodies for the single-page shorthand |
 | `keys` | list | `[]` | Entity keys, when you already know them |
 | `workers` | int | `4` | Parallel comparisons |
 | `delay_ms` | int | `0` | Pause before each comparison |
+
+### `[[pair.page]]` (repeatable)
+
+One comparable page type, applied to every entity. Mutually exclusive with
+`left_path`/`right_path` directly under `[pair]`.
+
+| Key | Type | Default | Purpose |
+|---|---|---|---|
+| `name` | string | **required** | Page identifier, shown in results. Must be unique |
+| `left_path` / `right_path` | string | **required** | URL templates, each containing `{key}` |
+| `left_body` / `right_body` | string | `""` | Per-page request body, overriding the source's |
 
 ### `[pair.crawl]`
 

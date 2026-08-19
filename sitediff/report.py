@@ -309,12 +309,15 @@ def build_html_report(result: DiffResult, profile: Profile) -> str:
 
 def build_run_report(report, profile: Profile) -> str:
     clean = not (report.drift or report.failed)
+    pages = report.by_page()
     tiles = [
-        _tile("entities", str(len(report.results))),
+        _tile("entities", str(report.entities)),
         _tile("clean", str(report.clean), "add"),
         _tile("drift", str(report.drift), "alt"),
         _tile("failed", str(report.failed), "del"),
     ]
+    if len(pages) > 1:
+        tiles.insert(1, _tile("pages each", str(len(pages))))
     total = len(report.results) or 1
     tiles.append(_ring_tile("passing", report.clean / total))
 

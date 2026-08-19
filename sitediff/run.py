@@ -21,7 +21,7 @@ from .config import Profile
 from .engine import Status, compare, compare_structured
 from .errors import CaptureError, MixedPayloadError, SiteDiffError
 from .extract import Page, extract_html
-from .pair import PairPlan, discover_keys, expand
+from .pair import PagePlan, PairPlan, discover_keys, expand
 from .source import fetch
 
 DEFAULT_DB = Path(".sitediff") / "runs.db"
@@ -41,13 +41,14 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS results (
   run_id INTEGER NOT NULL REFERENCES runs(id),
   key TEXT NOT NULL,
+  page TEXT NOT NULL DEFAULT 'page',
   status TEXT NOT NULL,
   added INTEGER NOT NULL DEFAULT 0,
   removed INTEGER NOT NULL DEFAULT 0,
   altered INTEGER NOT NULL DEFAULT 0,
   accepted INTEGER NOT NULL DEFAULT 0,
   detail TEXT NOT NULL DEFAULT '',
-  PRIMARY KEY (run_id, key)
+  PRIMARY KEY (run_id, key, page)
 );
 CREATE INDEX IF NOT EXISTS results_status ON results (run_id, status);
 """
@@ -57,6 +58,7 @@ CREATE INDEX IF NOT EXISTS results_status ON results (run_id, status);
 class EntityResult:
     key: str
     status: str
+    page: str = "page"
     added: int = 0
     removed: int = 0
     altered: int = 0
@@ -66,6 +68,10 @@ class EntityResult:
     @property
     def changed(self) -> int:
         return self.added + self.removed + self.altered
+
+    @property
+    def label(self) -> str:
+        return f"{self.key} / {self.page}" if self.page != "page" else self.key
 
 
 @dataclass
@@ -98,21 +104,41 @@ class RunReport:
     def drifted(self) -> list[EntityResult]:
         return [r for r in self.results if r.status != Status.CLEAN.value]
 
+    @property
+    def entities(self) -> int:
+        return len({r.key for r in self.results})
 
-def _compare_one(key: str, plan: PairPlan, profile: Profile,
+    def by_page(self) -> dict[str, dict[str, int]]:
+        """Per page type: how many entities were clean, drifted, or failed.
+
+        With several pages per entity a flat total hides which view regressed,
+        which is usually the first thing worth knowing.
+        """
+        summary: dict[str, dict[str, int]] = {}
+        for result in self.results:
+            bucket = summary.setdefault(
+                result.page, {"clean": 0, "drift": 0, "error": 0})
+            bucket[result.status if result.status in bucket else "error"] += 1
+        return summary
+
+
+def _compare_one(key: str, page: PagePlan, plan: PairPlan, profile: Profile,
                  store: AcceptStore, context: dict[str, str] | None = None) -> EntityResult:
-    values = context or {"key": key}
-    left_path, right_path = plan.url_paths(key, values)
+    values = {**(context or {"key": key}), "page": page.name}
+    left_path, right_path = page.paths(values)
+    left_body, right_body = page.bodies(values)
     policy = profile.egress_policy()
     sides = []
 
-    for name, path, side in ((plan.left, left_path, "left"),
-                             (plan.right, right_path, "right")):
+    for name, path, side, page_body in (
+        (plan.left, left_path, "left", left_body),
+        (plan.right, right_path, "right", right_body),
+    ):
         source = profile.source(name)
         url = source.url_for(path)
-        # The key is templated into the body too, so POST endpoints that take
-        # the entity id in a payload rather than a query string still pair.
-        body = expand(source.body, values) if source.body else ""
+        # A page may override the source's body, because a dispatching backend
+        # selects the view from a payload parameter rather than from the path.
+        body = page_body or (expand(source.body, values) if source.body else "")
         response = fetch(url, source, policy, body=body)
         # A non-2xx is not a comparable page. Left unchecked, two 404 bodies
         # compare equal and an entity that exists on neither side is reported
@@ -120,7 +146,7 @@ def _compare_one(key: str, plan: PairPlan, profile: Profile,
         if not 200 <= response.status < 300:
             raise CaptureError(
                 f"{side} side returned {response.status} {response.reason} for {url}. "
-                f"The entity could not be compared."
+                f"Page {page.name!r} of entity {key!r} could not be compared."
             )
         payload = from_response(response, Capture(source.capture), url,
                                 marker=source.hydration_marker,
@@ -162,7 +188,7 @@ def _compare_one(key: str, plan: PairPlan, profile: Profile,
         )[:2000]
 
     return EntityResult(
-        key=key, status=result.status.value, added=result.added,
+        key=key, page=page.name, status=result.status.value, added=result.added,
         removed=result.removed, altered=result.altered,
         accepted=result.accepted, detail=detail,
     )
@@ -182,30 +208,36 @@ def execute(profile: Profile, plan: PairPlan, store: AcceptStore,
         keys = keys[:limit]
     report.keys = keys
 
-    def one(key: str) -> EntityResult:
+    def one(job: tuple[str, PagePlan]) -> EntityResult:
+        key, page = job
         if plan.delay_ms:
             time.sleep(plan.delay_ms / 1000)
         try:
-            return _compare_one(key, plan, profile, store, discovered.context(key))
+            return _compare_one(key, page, plan, profile, store,
+                                discovered.context(key))
         except SiteDiffError as exc:
-            return EntityResult(key=key, status="error",
+            return EntityResult(key=key, page=page.name, status="error",
                                 detail=str(exc).splitlines()[0])
         except Exception as exc:
             # One unexpected failure must not discard a run of thousands. The
             # exception type is recorded so a real defect stays visible rather
             # than blending into ordinary fetch failures.
-            return EntityResult(key=key, status="error",
+            return EntityResult(key=key, page=page.name, status="error",
                                 detail=f"{type(exc).__name__}: {exc}"[:300])
+
+    # Every entity is compared on every page type, so a site with six views per
+    # school is six times the work and six times the coverage.
+    jobs = [(key, page) for key in keys for page in plan.pages]
 
     if plan.workers > 1:
         with ThreadPoolExecutor(max_workers=plan.workers) as pool:
-            for result in pool.map(one, keys):
+            for result in pool.map(one, jobs):
                 report.results.append(result)
                 if on_result:
                     on_result(result)
     else:
-        for key in keys:
-            result = one(key)
+        for job in jobs:
+            result = one(job)
             report.results.append(result)
             if on_result:
                 on_result(result)
@@ -230,10 +262,10 @@ def store_run(report: RunReport, db_path: str | Path | None = None) -> Path:
         run_id = cursor.lastrowid
         report.run_id = run_id
         conn.executemany(
-            "INSERT OR REPLACE INTO results (run_id, key, status, added, removed,"
-            " altered, accepted, detail) VALUES (?,?,?,?,?,?,?,?)",
-            [(run_id, r.key, r.status, r.added, r.removed, r.altered, r.accepted,
-              r.detail) for r in report.results],
+            "INSERT OR REPLACE INTO results (run_id, key, page, status, added,"
+            " removed, altered, accepted, detail) VALUES (?,?,?,?,?,?,?,?,?)",
+            [(run_id, r.key, r.page, r.status, r.added, r.removed, r.altered,
+              r.accepted, r.detail) for r in report.results],
         )
     return path
 

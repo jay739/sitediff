@@ -69,6 +69,61 @@ def _captures(match: re.Match) -> tuple[str, dict[str, str]]:
     return match.group(1), {}
 
 
+PAGE_KEYS = {"name", "left_path", "right_path", "left_body", "right_body"}
+
+
+def _parse_pages(section: dict, path: str) -> tuple[PagePlan, ...]:
+    """Read [[pair.page]] blocks, or the single-page shorthand.
+
+    A profile comparing one page per entity should not have to declare a page
+    list, so left_path/right_path directly under [pair] still work and become
+    one unnamed page.
+    """
+    raw_pages = section.get("page", [])
+    if raw_pages:
+        if section.get("left_path") or section.get("right_path"):
+            raise InvalidProfileError(
+                path,
+                "[pair] defines both [[pair.page]] blocks and a top-level "
+                "left_path/right_path. Use one or the other, so it is clear "
+                "which pages a run covers.",
+            )
+        pages = []
+        seen: set[str] = set()
+        for i, raw in enumerate(raw_pages):
+            unknown = sorted(set(raw) - PAGE_KEYS)
+            if unknown:
+                raise InvalidProfileError(
+                    path, f"unknown key(s) in [[pair.page]] entry {i}: {unknown}; "
+                          f"recognised: {sorted(PAGE_KEYS)}")
+            for required in ("name", "left_path", "right_path"):
+                if required not in raw:
+                    raise InvalidProfileError(
+                        path, f"[[pair.page]] entry {i} needs {required!r}")
+            if raw["name"] in seen:
+                raise InvalidProfileError(
+                    path, f"duplicate page name {raw['name']!r}")
+            seen.add(raw["name"])
+            pages.append(PagePlan(
+                name=raw["name"], left_path=raw["left_path"],
+                right_path=raw["right_path"], left_body=raw.get("left_body", ""),
+                right_body=raw.get("right_body", ""),
+            ))
+        return tuple(pages)
+
+    for required in ("left_path", "right_path"):
+        if required not in section:
+            raise InvalidProfileError(
+                path,
+                f"[pair] needs '{required}', or one or more [[pair.page]] blocks "
+                f"when an entity has several comparable pages.",
+            )
+    return (PagePlan(name="page", left_path=section["left_path"],
+                     right_path=section["right_path"],
+                     left_body=section.get("left_body", ""),
+                     right_body=section.get("right_body", "")),)
+
+
 def _compile_one(pattern: str, path: str, label: str) -> re.Pattern:
     try:
         return re.compile(pattern)
@@ -90,20 +145,65 @@ class Discovery:
 
 
 @dataclass(frozen=True)
+class PagePlan:
+    """One comparable page type, for every entity.
+
+    A site is rarely one page per entity. A school has a report card, a
+    demographics view, an assessments view and more, and each needs its own
+    URL on both sides, sometimes its own request body, because a dispatching
+    backend selects the view from a parameter rather than from the path.
+    """
+
+    name: str
+    left_path: str
+    right_path: str
+    left_body: str = ""
+    right_body: str = ""
+
+    def paths(self, values: dict[str, str]) -> tuple[str, str]:
+        if "{key}" not in self.left_path or "{key}" not in self.right_path:
+            raise PairingError(
+                f"page {self.name!r}: left_path and right_path must each contain "
+                f"'{{key}}', which is substituted with the entity key."
+            )
+        return expand(self.left_path, values), expand(self.right_path, values)
+
+    def bodies(self, values: dict[str, str]) -> tuple[str, str]:
+        return expand(self.left_body, values), expand(self.right_body, values)
+
+
+@dataclass(frozen=True)
 class PairPlan:
     left: str = ""
     right: str = ""
     left_path: str = ""
     right_path: str = ""
+    pages: tuple[PagePlan, ...] = ()
     keys: tuple[str, ...] = ()
     discover: Discovery | None = None
     crawl: Crawl | None = None
     delay_ms: int = 0
     workers: int = 4
 
+    def __post_init__(self) -> None:
+        # Constructing a plan with the single-page shorthand must behave the
+        # same as the parsed form. Without this, building one directly yields
+        # no pages and a run silently compares nothing.
+        if not self.pages and self.left_path and self.right_path:
+            object.__setattr__(self, "pages", (PagePlan(
+                name="page", left_path=self.left_path, right_path=self.right_path,
+                left_body=getattr(self, "left_body", ""),
+                right_body=getattr(self, "right_body", ""),
+            ),))
+
     @property
     def configured(self) -> bool:
-        return bool(self.left and self.right)
+        return bool(self.left and self.right and self.pages)
+
+    @property
+    def comparisons(self) -> int:
+        """Pages compared per entity."""
+        return len(self.pages)
 
     def url_paths(self, key: str, context: dict[str, str] | None = None) -> tuple[str, str]:
         if "{key}" not in self.left_path or "{key}" not in self.right_path:
@@ -120,16 +220,18 @@ def parse_pair(data: dict, path: str) -> PairPlan:
     if not section:
         return PairPlan()
 
-    known = {"left", "right", "left_path", "right_path", "keys", "discover",
-             "crawl", "delay_ms", "workers"}
+    known = {"left", "right", "left_path", "right_path", "left_body", "right_body",
+             "page", "keys", "discover", "crawl", "delay_ms", "workers"}
     unknown = sorted(set(section) - known)
     if unknown:
         raise InvalidProfileError(
             path, f"unknown key(s) in [pair]: {unknown}; recognised: {sorted(known)}")
 
-    for required in ("left", "right", "left_path", "right_path"):
+    for required in ("left", "right"):
         if required not in section:
             raise InvalidProfileError(path, f"[pair] needs '{required}'")
+
+    pages = _parse_pages(section, path)
 
     discovery = None
     raw = section.get("discover")
@@ -176,7 +278,9 @@ def parse_pair(data: dict, path: str) -> PairPlan:
 
     return PairPlan(
         left=section["left"], right=section["right"],
-        left_path=section["left_path"], right_path=section["right_path"],
+        left_path=section.get("left_path", ""),
+        right_path=section.get("right_path", ""),
+        pages=pages,
         keys=tuple(str(k) for k in section.get("keys", [])),
         discover=discovery,
         crawl=crawl,
