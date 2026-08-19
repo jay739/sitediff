@@ -315,13 +315,14 @@ def test_an_alias_actually_runs(capsys):
     assert "CLEAN" in out
 
 
-def test_readme_documents_every_command():
+def test_docs_document_every_command():
     """The command reference is generated from the parser, so it must not drift
     away from it."""
     import argparse as _argparse
 
     from sitediff.cli import build_parser
-    readme = (pathlib.Path(__file__).resolve().parent.parent / "README.md").read_text()
+    docs = (pathlib.Path(__file__).resolve().parent.parent
+            / "docs" / "commands.md").read_text()
     subparsers = next(a for a in build_parser()._actions
                       if isinstance(a, _argparse._SubParsersAction))
     seen, missing = set(), []
@@ -329,6 +330,31 @@ def test_readme_documents_every_command():
         if id(sp) in seen:
             continue
         seen.add(id(sp))
-        if f"#### `sitediff {name}`" not in readme:
+        if f"### `sitediff {name}`" not in docs:
             missing.append(name)
-    assert not missing, f"commands missing from the README: {missing}"
+    assert not missing, f"commands missing from docs/commands.md: {missing}"
+
+
+def test_command_docs_have_no_empty_tables():
+    """A command with no options should say so, not render a bare table header."""
+    docs = (pathlib.Path(__file__).resolve().parent.parent
+            / "docs" / "commands.md").read_text()
+    lines = docs.splitlines()
+    for i, line in enumerate(lines[:-2]):
+        if line.startswith("| Flag | Purpose |"):
+            assert lines[i + 2].startswith("|"), (
+                f"empty flag table at line {i + 1}: a command with no options "
+                f"must say so instead")
+
+
+def test_readme_links_to_every_doc():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    readme = (root / "README.md").read_text()
+    for doc in sorted((root / "docs").glob("*.md")):
+        assert f"docs/{doc.name}" in readme, f"README does not link to {doc.name}"
+
+
+def test_docs_link_back_to_the_readme():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    for doc in sorted((root / "docs").glob("*.md")):
+        assert "../README.md" in doc.read_text(), f"{doc.name} has no way back"

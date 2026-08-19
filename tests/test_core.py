@@ -270,7 +270,7 @@ def test_unknown_source_key_is_rejected(tmp_path):
 
 
 def test_every_documented_key_is_accepted():
-    """The README reference and the parser must not drift apart."""
+    """The configuration reference and the parser must not drift apart."""
     import re as _re
 
     from sitediff.config import (
@@ -281,8 +281,10 @@ def test_every_documented_key_is_accepted():
         SECURITY_KEYS,
         SOURCE_KEYS,
     )
-    readme = (pathlib.Path(__file__).resolve().parent.parent / "README.md").read_text()
-    documented = set(_re.findall(r"^\| `(\w+)` \|", readme, _re.M))
+    # The configuration reference lives in docs/, so that is what must not drift.
+    docs = (pathlib.Path(__file__).resolve().parent.parent
+            / "docs" / "configuration.md").read_text()
+    documented = set(_re.findall(r"^\| `(\w+)` \|", docs, _re.M))
     known = PROFILE_KEYS | EXTRACT_KEYS | COMPARE_KEYS | SECURITY_KEYS | SOURCE_KEYS | RULE_KEYS
     missing = known - documented
     assert not missing, f"undocumented config keys: {sorted(missing)}"
