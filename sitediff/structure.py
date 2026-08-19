@@ -106,8 +106,17 @@ def _table_shape(table: Tag) -> tuple[str, str]:
     return label, f"{len(rows)} rows x {widest} columns"
 
 
-def build(html: str, parser: str = "lxml") -> Inventory:
-    """Inventory the nameable elements of a page."""
+def build(html: str, config=None, parser: str = "lxml") -> Inventory:
+    """Inventory the nameable elements of a page.
+
+    What counts as nameable is profile-driven, like every other decision in
+    this tool. The defaults are ordinary HTML semantics, which are not a
+    per-site choice, but a team can narrow the set, silence labels that are
+    pure chrome, or register components this tool has never heard of.
+    """
+    from .config import StructureConfig
+
+    cfg = config if config is not None else StructureConfig()
     try:
         soup = BeautifulSoup(html, parser)
     except Exception:
@@ -119,15 +128,20 @@ def build(html: str, parser: str = "lxml") -> Inventory:
     inventory = Inventory()
     root = soup.body or soup
 
+    def add(kind: str, label: str, detail: str = "") -> None:
+        if not cfg.wants(kind) or (label and cfg.silenced(label)):
+            return
+        inventory.elements.append(Element(kind, label, detail))
+
     for level in range(1, 7):
         for heading in root.find_all(f"h{level}"):
             text = _clean(heading.get_text())
             if text:
-                inventory.elements.append(Element("Heading", text, f"level {level}"))
+                add("Heading", text, f"level {level}")
 
     for table in root.find_all("table"):
         label, shape = _table_shape(table)
-        inventory.elements.append(Element("Table", label, shape))
+        add("Table", label, shape)
 
     for control in root.find_all(["input", "select", "textarea"]):
         if control.name == "input":
@@ -141,31 +155,37 @@ def build(html: str, parser: str = "lxml") -> Inventory:
         detail = ""
         if control.name == "select":
             detail = f"{len(control.find_all('option'))} options"
-        inventory.elements.append(
-            Element(kind, _accessible_name(control, soup), detail))
+        add(kind, _accessible_name(control, soup), detail)
 
     for button in root.find_all("button"):
-        label = _clean(button.get_text()) or _accessible_name(button, soup)
-        inventory.elements.append(Element("Button", label))
+        add("Button", _clean(button.get_text()) or _accessible_name(button, soup))
 
     for image in root.find_all("img"):
         alt = image.get("alt")
         described = isinstance(alt, str) and alt.strip() != ""
-        inventory.elements.append(
-            Element("Image", _clean(alt) if described else "",
-                    "" if described else "no alt text"))
+        add("Image", _clean(alt) if described else "",
+            "" if described else "no alt text")
 
-    for landmark in ("nav", "main", "header", "footer", "aside", "form"):
+    for landmark in cfg.landmarks:
         for found in root.find_all(landmark):
-            inventory.elements.append(
-                Element("Landmark", landmark, _accessible_name(found, soup)))
+            add("Landmark", landmark, _accessible_name(found, soup))
 
-    for kind in ("ul", "ol"):
-        for listing in root.find_all(kind):
+    for tag in ("ul", "ol"):
+        for listing in root.find_all(tag):
             items = len(listing.find_all("li", recursive=False))
             if items:
-                inventory.elements.append(
-                    Element("List", _accessible_name(listing, soup), f"{items} items"))
+                add("List", _accessible_name(listing, soup), f"{items} items")
+
+    # Components this tool has never heard of, registered by the profile.
+    for custom in cfg.custom:
+        try:
+            matches = root.select(custom.selector)
+        except Exception:
+            continue
+        for found in matches:
+            label = (found.get(custom.label_attr, "") if custom.label_attr
+                     else _clean(found.get_text()))
+            add(custom.kind, _clean(label if isinstance(label, str) else ""))
 
     counts: dict[str, int] = {}
     for element in inventory.elements:

@@ -92,6 +92,51 @@ class Rule:
         return self.pattern.sub(self.replacement, line)
 
 
+DEFAULT_LANDMARKS = ["nav", "main", "header", "footer", "aside", "form"]
+
+# Every element kind the inventory can produce. Listing them makes the set
+# discoverable and lets a profile narrow it, rather than the choice being
+# implicit in whatever the builder happens to look for.
+ALL_ELEMENT_KINDS = [
+    "Heading", "Table", "Button", "Image", "Landmark", "List",
+    "Text input", "Search box", "Email input", "Number input", "Phone input",
+    "URL input", "Password input", "Checkbox", "Radio button", "Date input",
+    "File upload", "Submit button", "Reset button", "Input",
+    "Dropdown", "Text area",
+]
+
+
+@dataclass(frozen=True)
+class CustomElement:
+    """A site's own component, inventoried alongside the standard ones."""
+
+    selector: str
+    kind: str
+    label_attr: str = ""
+
+
+@dataclass(frozen=True)
+class StructureConfig:
+    """What the element comparison looks for.
+
+    Defaults cover ordinary HTML semantics, which are not a per-site decision:
+    an <h1> is a heading everywhere. A profile narrows the set, silences noisy
+    labels, or adds components this tool has never heard of.
+    """
+
+    enabled: bool = True
+    kinds: list[str] = field(default_factory=list)          # empty means all
+    landmarks: list[str] = field(default_factory=lambda: list(DEFAULT_LANDMARKS))
+    ignore_labels: list[re.Pattern] = field(default_factory=list)
+    custom: list[CustomElement] = field(default_factory=list)
+
+    def wants(self, kind: str) -> bool:
+        return not self.kinds or kind in self.kinds
+
+    def silenced(self, label: str) -> bool:
+        return any(p.search(label) for p in self.ignore_labels)
+
+
 class Mode(StrEnum):
     """What counts as a difference.
 
@@ -137,6 +182,7 @@ class Profile:
 
     # Pairing and browser options, both optional
     pair: PairPlan = field(default_factory=PairPlan)
+    structure: StructureConfig = field(default_factory=StructureConfig)
     browser: dict = field(default_factory=dict)
 
     # Acquisition and safety
@@ -286,7 +332,8 @@ def load_profile(source: str | Path | None) -> Profile:
     security = data.get("security", {})
 
     known_sections = {"profile", "extract", "compare", "normalize",
-                      "redact", "security", "source", "pair", "browser"}
+                      "redact", "security", "source", "pair", "browser",
+                      "structure"}
     unknown = set(data) - known_sections
     if unknown:
         raise InvalidProfileError(
@@ -343,6 +390,45 @@ def load_profile(source: str | Path | None) -> Profile:
             max_redirects=int(raw.get("max_redirects", DEFAULT_MAX_REDIRECTS)),
             follow_redirects=raw.get("follow_redirects", True),
         )
+
+    raw_structure = data.get("structure", {})
+    STRUCTURE_KEYS = {"enabled", "kinds", "landmarks", "ignore_labels", "custom"}
+    _reject_unknown({k: v for k, v in raw_structure.items() if k != "custom"},
+                    STRUCTURE_KEYS, path, "[structure]")
+    unknown_kinds = [
+        k for k in raw_structure.get("kinds", []) if k not in ALL_ELEMENT_KINDS
+    ]
+    if unknown_kinds:
+        raise InvalidProfileError(
+            path,
+            f"[structure] kinds contains unknown element type(s) {unknown_kinds}.\n"
+            f"Known kinds: {', '.join(ALL_ELEMENT_KINDS)}",
+        )
+    custom_elements = []
+    for i, raw_custom in enumerate(raw_structure.get("custom", [])):
+        _reject_unknown(raw_custom, {"selector", "kind", "label_attr"}, path,
+                        f"[[structure.custom]] entry {i}")
+        for required in ("selector", "kind"):
+            if required not in raw_custom:
+                raise InvalidProfileError(
+                    path, f"[[structure.custom]] entry {i} needs {required!r}")
+        custom_elements.append(CustomElement(
+            selector=raw_custom["selector"], kind=raw_custom["kind"],
+            label_attr=raw_custom.get("label_attr", ""),
+        ))
+    structure_config = StructureConfig(
+        enabled=raw_structure.get("enabled", True),
+        kinds=_require_list_of_str(raw_structure.get("kinds", []), path,
+                                   "structure.kinds"),
+        landmarks=_require_list_of_str(
+            raw_structure.get("landmarks", DEFAULT_LANDMARKS), path,
+            "structure.landmarks"),
+        ignore_labels=_compile(
+            _require_list_of_str(raw_structure.get("ignore_labels", []), path,
+                                 "structure.ignore_labels"),
+            path, "structure.ignore_labels"),
+        custom=custom_elements,
+    )
 
     mode_raw = compare.get("mode", Mode.VALUES.value)
     try:
@@ -417,6 +503,7 @@ def load_profile(source: str | Path | None) -> Profile:
         redact=parse_rules("redact"),
         side_overrides=side_overrides,
         pair=parse_pair(data, path),
+        structure=structure_config,
         browser=data.get("browser", {}),
         compare_headers=_require_list_of_str(
             compare.get("headers", []), path, "compare.headers",

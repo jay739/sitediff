@@ -139,3 +139,71 @@ def test_structural_findings_can_be_accepted(tmp_path):
 @pytest.mark.parametrize("markup", ["", "<html></html>", "not html at all"])
 def test_degenerate_input_does_not_raise(markup):
     assert structure.build(markup).counts.get("Link", 0) == 0
+
+
+# --- the inventory is profile-driven, like everything else --------------------
+
+def config(**kw):
+    from sitediff.config import StructureConfig
+    return StructureConfig(**kw)
+
+
+def test_kinds_narrow_what_is_inventoried():
+    only_tables = structure.build(LEGACY, config(kinds=["Table"]))
+    assert {e.kind for e in only_tables.elements} == {"Table"}
+
+
+def test_ignore_labels_silence_chrome():
+    import re as _re
+    html = '<html><body><button>Skip to main content</button><button>Export</button></body></html>'
+    cfg = config(ignore_labels=[_re.compile(r"^Skip to main content$")])
+    labels = [e.label for e in structure.build(html, cfg).elements if e.kind == "Button"]
+    assert labels == ["Export"]
+
+
+def test_landmarks_are_configurable():
+    html = "<html><body><nav>n</nav><aside>a</aside><p>x</p></body></html>"
+    found = structure.build(html, config(landmarks=["nav"])).elements
+    assert [e.detail or e.label for e in found if e.kind == "Landmark"] == ["nav"]
+
+
+def test_custom_components_can_be_registered():
+    """A team's own component is inventoried without this tool knowing it."""
+    from sitediff.config import CustomElement
+    html = ('<html><body><div role="tab">Report Card</div>'
+            '<div role="tab">Demographics</div></body></html>')
+    cfg = config(custom=[CustomElement(selector="[role=tab]", kind="Tab")])
+    tabs = [e.label for e in structure.build(html, cfg).elements if e.kind == "Tab"]
+    assert tabs == ["Report Card", "Demographics"]
+
+
+def test_custom_label_can_come_from_an_attribute():
+    from sitediff.config import CustomElement
+    html = '<html><body><x-chart data-title="Proficiency"></x-chart></body></html>'
+    cfg = config(custom=[CustomElement(selector="x-chart", kind="Chart",
+                                       label_attr="data-title")])
+    charts = [e.label for e in structure.build(html, cfg).elements if e.kind == "Chart"]
+    assert charts == ["Proficiency"]
+
+
+def test_an_invalid_custom_selector_is_skipped_not_fatal():
+    from sitediff.config import CustomElement
+    cfg = config(custom=[CustomElement(selector="[[[nonsense", kind="X")])
+    assert structure.build(LEGACY, cfg).elements
+
+
+def test_unknown_kind_in_a_profile_is_rejected(tmp_path):
+    from sitediff.config import load_profile
+    from sitediff.errors import InvalidProfileError
+    path = tmp_path / "p.toml"
+    path.write_text('[structure]\nkinds = ["Widget"]\n', encoding="utf-8")
+    with pytest.raises(InvalidProfileError) as exc:
+        load_profile(str(path))
+    assert "Widget" in str(exc.value) and "Known kinds" in str(exc.value)
+
+
+def test_structure_can_be_disabled_in_a_profile(tmp_path):
+    from sitediff.config import load_profile
+    path = tmp_path / "p.toml"
+    path.write_text("[structure]\nenabled = false\n", encoding="utf-8")
+    assert load_profile(str(path)).structure.enabled is False

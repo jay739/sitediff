@@ -272,6 +272,35 @@ Structural findings count toward the verdict, so a page whose text matches
 exactly still reports drift if a control disappeared. They can be accepted like
 any other intentional difference. Pass `--no-structure` to compare text only.
 
+### `[structure]`
+
+The defaults are ordinary HTML semantics, which are not a per-site decision: an
+`<h1>` is a heading everywhere. A profile narrows the set, silences labels that
+are pure chrome, or registers components this tool has never heard of.
+
+| Key | Type | Default | Purpose |
+|---|---|---|---|
+| `enabled` | bool | `true` | Compare elements at all |
+| `kinds` | list | `[]` | Element types to inventory. Empty means all. An unknown kind is rejected with the full list |
+| `landmarks` | list | `nav`, `main`, `header`, `footer`, `aside`, `form` | Landmark elements to record |
+| `ignore_labels` | list of regex | `[]` | Labels to skip, for chrome like "Skip to main content" |
+
+```toml
+[structure]
+kinds = ["Heading", "Table", "Button", "Dropdown", "Text input"]
+ignore_labels = ['^Skip to main content$']
+
+# Your own components, inventoried alongside the standard ones.
+[[structure.custom]]
+selector = "[role=tab]"
+kind = "Tab"
+
+[[structure.custom]]
+selector = "x-chart"
+kind = "Chart"
+label_attr = "data-title"
+```
+
 ## Noise cancellation
 
 Two captures of the *same* side will disagree wherever a page is

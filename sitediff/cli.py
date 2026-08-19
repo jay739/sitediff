@@ -171,11 +171,15 @@ def attach_structure(result, left_payload, right_payload, profile: Profile,
     """
     if skip or left_payload.kind is not Kind.TEXT or right_payload.kind is not Kind.TEXT:
         return
+    if not profile.structure.enabled:
+        return
     from . import structure as structure_mod
 
     result.structure_report = structure_mod.compare(
-        structure_mod.build(left_payload.html, profile.for_side("left").parser),
-        structure_mod.build(right_payload.html, profile.for_side("right").parser),
+        structure_mod.build(left_payload.html, profile.structure,
+                            profile.for_side("left").parser),
+        structure_mod.build(right_payload.html, profile.structure,
+                            profile.for_side("right").parser),
         Path(left_payload.label).name or "left",
         Path(right_payload.label).name or "right",
     )
