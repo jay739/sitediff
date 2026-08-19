@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from urllib.parse import urlparse
 
 from rich.text import Text
 
@@ -19,8 +20,14 @@ from .config import Profile, discover_profiles, load_profile, profile_search_pat
 from .engine import Status, compare, noise_baseline
 from .errors import SiteDiffError
 from .extract import Page, extract, extract_html
-from .render import make_console, render_side_by_side, render_summary, render_unified
-from .source import Source, fetch
+from .render import (
+    make_console,
+    render_probe,
+    render_side_by_side,
+    render_summary,
+    render_unified,
+)
+from .source import EgressPolicy, Source, fetch
 
 SOURCE_REF = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+):(?P<path>/.*)?$")
 
@@ -63,6 +70,13 @@ def build_parser() -> argparse.ArgumentParser:
     f_p.add_argument("-p", "--profile")
     f_p.add_argument("--body", action="store_true", help="also print extracted lines")
 
+    pr_p = sub.add_parser(
+        "probe", help="work out how a page delivers its values, and what it is built with")
+    pr_p.add_argument("target", help="URL, source:/path, or a saved HTML file")
+    pr_p.add_argument("-p", "--profile")
+    pr_p.add_argument("--suggest", action="store_true",
+                      help="print a profile fragment you can paste and edit")
+
     sub.add_parser("profiles", help="list the built-in profiles")
     src_p = sub.add_parser("sources", help="list sources and the egress allowlist")
     src_p.add_argument("-p", "--profile")
@@ -76,9 +90,7 @@ def resolve_side(token: str, profile: Profile, side: str, allow_unrendered: bool
     into the profile, or a path to a saved HTML file.
     """
     if token.startswith(("http://", "https://")):
-        source = Source(name=side, base_url=token)
-        policy = profile.egress_policy()
-        response = fetch(token, source, policy)
+        response = fetch_url(token, profile)
         return _page_from_response(response, token, profile, side, allow_unrendered)
 
     match = SOURCE_REF.match(token)
@@ -89,6 +101,19 @@ def resolve_side(token: str, profile: Profile, side: str, allow_unrendered: bool
         return _page_from_response(response, url, profile, side, allow_unrendered)
 
     return extract(token, profile, side=side, allow_unrendered=allow_unrendered)
+
+
+def fetch_url(url: str, profile: Profile):
+    """Fetch a URL typed directly on the command line.
+
+    Typing a URL is itself the authorisation for that one host, so it is added
+    to the policy for this run. The allowlist still governs everything else,
+    including every redirect hop, so an ad-hoc URL cannot bounce the tool
+    somewhere it was never pointed at.
+    """
+    host = urlparse(url).hostname or ""
+    policy = EgressPolicy([*profile.egress_policy().allowed, host])
+    return fetch(url, Source(name="cli", base_url=url), policy)
 
 
 def _page_from_response(response, url, profile, side, allow_unrendered) -> Page:
@@ -171,6 +196,40 @@ def cmd_fetch(args) -> int:
     return EXIT_CLEAN
 
 
+def cmd_probe(args) -> int:
+    from .probe import probe, suggested_profile
+
+    profile = load_profile(args.profile)
+    console = make_console()
+
+    response = None
+    if args.target.startswith(("http://", "https://")):
+        response = fetch_url(args.target, profile)
+        html, url = response.body, args.target
+    else:
+        match = SOURCE_REF.match(args.target)
+        if match and match.group("name") in profile.sources:
+            source = profile.source(match.group("name"))
+            url = source.url_for(match.group("path") or "")
+            response = fetch(url, source, profile.egress_policy())
+            html = response.body
+        else:
+            from .extract import read_html
+            url, html = args.target, read_html(args.target)
+
+    report = probe(html, url, profile, response)
+    render_probe(report, console)
+
+    if args.suggest:
+        console.print("\n  [bold]Suggested profile fragment[/]\n")
+        # TOML section headers are square brackets, which the markup parser
+        # would consume, so emit the fragment as literal text.
+        for line in suggested_profile(report).splitlines():
+            console.print(Text(f"    {line}", style="dim"))
+        console.print()
+    return EXIT_CLEAN
+
+
 def cmd_sources(args) -> int:
     console = make_console()
     profile = load_profile(getattr(args, "profile", None))
@@ -215,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     handlers = {
         "compare": cmd_compare, "extract": cmd_extract, "profiles": cmd_profiles,
-        "fetch": cmd_fetch, "sources": cmd_sources,
+        "fetch": cmd_fetch, "sources": cmd_sources, "probe": cmd_probe,
     }
     try:
         return handlers[args.command](args)

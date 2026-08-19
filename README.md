@@ -53,6 +53,12 @@ Compare two live endpoints defined in a profile:
 sitediff compare direct:/ public:/ -p homelab-proxy
 ```
 
+Work out how a site delivers its values before writing any profile:
+
+```
+sitediff probe https://app.example.com --suggest
+```
+
 See how a page was served, without diffing:
 
 ```
@@ -72,6 +78,45 @@ Exit codes follow the diff convention, so this composes in CI:
 | `0` | The two sides agree |
 | `1` | Drift was found |
 | `2` | The run failed |
+
+## Probing an unfamiliar site
+
+`sitediff probe` answers, from a single plain GET with no JavaScript executed,
+the question you would otherwise answer by opening devtools and reading the
+Network tab:
+
+- **Which capture strategy this site needs**, with the viable alternatives
+  ranked rather than a single answer forced. A server-rendered single page app
+  genuinely supports more than one.
+- **What it is built with.** Next.js, Nuxt, SvelteKit, Remix, Gatsby, Astro,
+  Angular, AngularJS, Knockout, Ember, Backbone, Vue, React, HTMX, Alpine,
+  jQuery. Meta-frameworks are named ahead of the view layer beneath them.
+- **Embedded state**, and how large it is: `__NEXT_DATA__`, `self.__next_f`,
+  `__NUXT__`, `__remixContext`, `__INITIAL_STATE__`, `__PRELOADED_STATE__`,
+  `__APOLLO_STATE__`.
+- **Candidate data endpoints** pulled out of inline script and markup, which is
+  the Network-tab substitute.
+- **Loading placeholders**, ready to paste as `render_sentinels`.
+- **How much of the payload is readable text**, the clearest no-JS signal that
+  a page is client-rendered.
+- **Response metadata**: status, resolved address, TLS issuer, headers.
+
+`--suggest` prints a profile fragment you can paste and edit. It is a loadable
+profile, not pseudocode.
+
+### Capture strategies
+
+| Strategy | Where values come from | Browser |
+|---|---|---|
+| `static` | Already in the served HTML | No |
+| `hydration` | Embedded state in a script tag | No |
+| `json` | A data endpoint called directly | No |
+| `browser` | The settled DOM after JS runs | Yes |
+
+Preference runs hydration, then json, then static, then browser. Structured
+data beats text for a verification tool, because a field diff names the field
+that moved instead of handing back a hunk to interpret. Browser support is an
+optional extra, never a base dependency.
 
 ## Noise cancellation
 
@@ -265,6 +310,11 @@ any engine module, and a test enforces that. Every host the tool may contact
 comes from the profile you write. Bundled templates may reference only RFC 2606
 documentation domains, which cannot reach anything real, and that is enforced
 too.
+
+**A URL you type is its own authorisation.** Passing a URL directly on the
+command line permits that one host for that run, since typing it is the
+consent. Everything else still comes from the profile, and redirects from that
+URL remain constrained, so an ad-hoc target cannot bounce the tool onward.
 
 **Egress allowlist.** The tool contacts only hosts the profile names. This is
 checked before every connection, including each redirect hop, so an allowed

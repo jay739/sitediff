@@ -242,3 +242,62 @@ def render_side_by_side(result: DiffResult, console: Console) -> None:
         console.print()
         console.print(table)
     console.print()
+
+
+def render_probe(report, console: Console) -> None:
+    """Present a probe as the answer to 'what do I put in my profile'."""
+    from .probe import Strategy
+
+    blurb = {
+        Strategy.STATIC: "Values are already in the served HTML. No browser needed.",
+        Strategy.HYDRATION: "Structured state is embedded in the HTML. No browser needed.",
+        Strategy.JSON: "Values arrive separately. Call the data endpoint directly.",
+        Strategy.BROWSER: "Values require JavaScript execution. A browser is needed.",
+    }[report.strategy]
+
+    head = Text()
+    head.append(f"{report.url}\n\n", style="meta.value")
+    head.append("capture   ", style="meta.key")
+    head.append(report.strategy.value, style="status.drift"
+                if report.strategy.value == "browser" else "status.clean")
+    head.append(f"\n          {blurb}\n", style="meta.key")
+    for reason in report.reasons:
+        head.append(f"          - {reason}\n", style="dim")
+    if report.alternatives:
+        head.append("\nalso    ", style="meta.key")
+        head.append("viable, in preference order\n", style="meta.key")
+        for name, why in report.alternatives:
+            head.append(f"          {name}", style="status.clean")
+            head.append(f"  {why}\n", style="dim")
+    console.print(Panel(head, title="probe", border_style="cyan", expand=False))
+
+    def section(title: str, rows: list[str], style: str = "") -> None:
+        if not rows:
+            return
+        console.print(f"\n  [bold]{title}[/]")
+        for row in rows:
+            console.print(f"    {row}", style=style, highlight=False)
+
+    section("Frameworks detected",
+            [f"{name}  [dim]{note}[/]" for name, note in report.frameworks]
+            or ["[dim]none recognised[/]"])
+
+    section("Embedded state",
+            [f"{name}  [dim]{note}, ~{size:,} bytes[/]" for name, note, size in report.hydration])
+
+    section("Candidate data endpoints  [dim](what the Network tab would show)[/]",
+            report.endpoints[:15])
+    if len(report.endpoints) > 15:
+        console.print(f"    [dim]... and {len(report.endpoints) - 15} more[/]")
+
+    section("Loading placeholders  [dim](use as render_sentinels)[/]",
+            [repr(m) for m in report.loading_markers])
+
+    section("Response", [f"{k:<16} {v}" for k, v in report.meta.items()])
+
+    console.print("\n  [bold]Content[/]")
+    console.print(f"    {'visible lines':<16} {report.visible_lines}")
+    console.print(f"    {'visible text':<16} {report.visible_chars:,} chars "
+                  f"of {report.html_bytes:,} bytes ({report.text_ratio:.1%})")
+    console.print(f"    {'external scripts':<16} {len(report.scripts)}")
+    console.print()
