@@ -21,11 +21,37 @@ KNOCKOUT = """<html><head>
 <table><tr><td>Percent Proficient</td><td data-bind="text: pct">Loading...</td></tr></table>
 </div></body></html>"""
 
+# Sized like a real server-rendered page. A four-line fixture is
+# indistinguishable from an empty shell, which is not what this represents.
 NEXT = """<html><head><link rel="preload" href="/_next/static/chunks/main.js"></head><body>
-<main><h1>Example Elementary</h1><table><tr><td>Percent Proficient</td><td>45.2%</td></tr></table>
-<p>Total score is 72.4 out of 100 points across the full reporting year here.</p></main>
+<main><h1>Example Elementary School</h1>
+<p>Report card for the 2025 school year, published by the state education agency.</p>
+<table>
+<tr><th>Metric</th><th>Value</th><th>State average</th></tr>
+<tr><td>Percent Proficient</td><td>45.2%</td><td>51.8%</td></tr>
+<tr><td>Earned Points</td><td>18.5</td><td>21.0</td></tr>
+<tr><td>Attendance Rate</td><td>91.4%</td><td>93.1%</td></tr>
+<tr><td>Chronic Absenteeism</td><td>18.9%</td><td>15.2%</td></tr>
+<tr><td>Enrollment</td><td>512</td><td>-</td></tr>
+</table>
+<p>Total score is 72.4 out of 100 points across the full reporting year here.</p>
+<p>An asterisk indicates a value suppressed to protect student privacy.</p>
+</main>
 <script>self.__next_f.push([1,"{\\"recordId\\":\\"1234\\",\\"pct\\":45.2,\\"earned\\":18.5,
 \\"name\\":\\"Example Elementary\\",\\"county\\":\\"01\\",\\"attendance\\":91.4}"])</script>
+</body></html>"""
+
+# The pages-router case: a plain application/json script tag, which IS readable.
+NEXT_DATA = """<html><head><link rel="preload" href="/_next/static/chunks/main.js"></head>
+<body><main><h1>Example Elementary School</h1>
+<p>Report card for the 2025 school year, published by the state education agency.</p>
+<table><tr><td>Percent Proficient</td><td>45.2%</td></tr>
+<tr><td>Attendance Rate</td><td>91.4%</td></tr></table></main>
+<script id="__NEXT_DATA__" type="application/json">
+{"props":{"pageProps":{"school":{"id":"1234","name":"Example Elementary School",
+"county":"Example County","gradeSpan":"EMH","pct":45.2,"attendance":91.4,
+"earnedPoints":18.5,"enrollment":512,"year":2025,"chronicAbsenteeism":18.9}}},
+"page":"/school/[id]","query":{"id":"1234"},"buildId":"abc123"}</script>
 </body></html>"""
 
 STATIC = """<html><body><main><h1>Annual Report</h1>
@@ -43,12 +69,29 @@ def run(html, url="https://a.example.com/p"):
 
 @pytest.mark.parametrize("html,expected", [
     (KNOCKOUT, Strategy.JSON),
-    (NEXT, Strategy.HYDRATION),
+    (NEXT_DATA, Strategy.HYDRATION),
+    (NEXT, Strategy.STATIC),
     (STATIC, Strategy.STATIC),
     (OPAQUE, Strategy.BROWSER),
 ])
 def test_strategy_recommendation(html, expected):
     assert run(html).strategy is expected
+
+
+def test_rsc_stream_is_not_offered_as_hydration():
+    """An app-router RSC payload is large and clearly structured, and is still a
+    JavaScript expression rather than JSON. Recommending hydration for it sends
+    someone down a dead end, so probe attempts the parse before advising it."""
+    report = run(NEXT)
+    assert report.strategy is not Strategy.HYDRATION
+    assert any("__next_f" in name for name, _, _, ok in report.hydration if not ok)
+    assert any("JavaScript expression" in reason for reason in report.reasons)
+
+
+def test_parseable_hydration_is_offered():
+    report = run(NEXT_DATA)
+    assert report.strategy is Strategy.HYDRATION
+    assert any(name == "__NEXT_DATA__" and ok for name, _, _, ok in report.hydration)
 
 
 def test_frameworks_are_named_most_specific_first():
@@ -64,7 +107,7 @@ def test_endpoints_are_recovered_from_inline_script():
 
 
 def test_assets_are_not_reported_as_data_endpoints():
-    endpoints = run(NEXT).endpoints
+    endpoints = run(NEXT_DATA).endpoints
     assert not any(e.endswith((".js", ".css", ".png", ".woff2")) for e in endpoints)
 
 
@@ -82,7 +125,7 @@ def test_placeholder_text_does_not_make_static_viable():
 
 def test_ssr_spa_reports_both_viable_strategies():
     """Values are readable as text and present as state; say so, don't hide one."""
-    report = run(NEXT)
+    report = run(NEXT_DATA)
     assert report.strategy is Strategy.HYDRATION
     assert Strategy.STATIC.value in [name for name, _ in report.alternatives]
 
@@ -94,7 +137,7 @@ def test_ld_json_alone_does_not_imply_hydration():
     assert run(html).strategy is Strategy.BROWSER
 
 
-@pytest.mark.parametrize("html", [KNOCKOUT, NEXT, STATIC, OPAQUE])
+@pytest.mark.parametrize("html", [KNOCKOUT, NEXT, NEXT_DATA, STATIC, OPAQUE])
 def test_suggested_fragment_is_a_loadable_profile(html, tmp_path):
     """The fragment is meant to be pasted, so it must actually parse."""
     out = tmp_path / "frag.toml"

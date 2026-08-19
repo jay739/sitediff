@@ -91,8 +91,14 @@ _ENDPOINT_PATTERNS = (
 
 _SCRIPT_SRC = re.compile(r"""<script[^>]+src\s*=\s*['"]([^'"]+)['"]""", re.I)
 _SCRIPT_BLOCK = re.compile(r"<script\b[^>]*>(.*?)</script>", re.I | re.S)
+# Matched against VISIBLE TEXT only, never raw markup. Scanning the HTML picks
+# up loading="lazy" attributes and .loading-spinner class names, which are not
+# placeholders at all; acting on those would suggest a sentinel that fails every
+# page and would wrongly rule out static capture.
 _LOADING = re.compile(
-    r"(loading[.\s]*(?:please wait|\.\.\.)?|please wait|fetching data|one moment)", re.I
+    r"^\s*(loading\b[\s.]*(?:please wait)?[.\s]*|please wait[.\s]*|"
+    r"fetching data[.\s]*|one moment[.\s]*)$",
+    re.I,
 )
 
 
@@ -101,7 +107,7 @@ class ProbeReport:
     url: str
     status: int = 200
     frameworks: list[tuple[str, str]] = field(default_factory=list)
-    hydration: list[tuple[str, str, int]] = field(default_factory=list)
+    hydration: list[tuple[str, str, int, bool]] = field(default_factory=list)
     endpoints: list[str] = field(default_factory=list)
     scripts: list[str] = field(default_factory=list)
     loading_markers: list[str] = field(default_factory=list)
@@ -134,17 +140,36 @@ def _find(signatures, haystack: str):
     return hits
 
 
-def _hydration_payload_size(html: str, marker: Signature) -> int:
-    """Rough size of the embedded state, as a proxy for whether it holds data."""
+def _hydration_payload(html: str, marker: Signature) -> tuple[int, bool]:
+    """Size of the embedded state, and whether it is actually parseable.
+
+    Size alone is not enough to recommend hydration capture. A Next.js app
+    router RSC stream is a large and obviously structured payload that is still
+    a JavaScript expression rather than JSON, so recommending it would send
+    someone down a dead end. Probe therefore attempts the parse it is about to
+    advise, rather than assuming presence implies usability.
+    """
     total = 0
+    parseable = False
     for block in _SCRIPT_BLOCK.findall(html):
         if any(re.search(p, block, re.I) for p in marker.patterns):
             total += len(block)
+            if not parseable:
+                try:
+                    json.loads(block.strip())
+                    parseable = True
+                except (ValueError, TypeError):
+                    pass
     if not total and marker.name == "__NEXT_DATA__":
         m = re.search(r'id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
         if m:
             total = len(m.group(1))
-    return total
+            try:
+                json.loads(m.group(1).strip())
+                parseable = True
+            except (ValueError, TypeError):
+                pass
+    return total, parseable
 
 
 def _endpoints(html: str, base_url: str) -> list[str]:
@@ -173,6 +198,12 @@ _PREFERENCE = (Strategy.HYDRATION, Strategy.JSON, Strategy.STATIC, Strategy.BROW
 # Below this a payload is a config blob or a feature flag, not page data.
 MIN_HYDRATION_BYTES = 100
 
+# A page is treated as an empty shell only when BOTH signals agree: almost no
+# readable text and almost no lines. Either alone gives false positives, since a
+# short page is still a real page.
+MIN_RENDERED_CHARS = 200
+MIN_RENDERED_LINES = 5
+
 
 def _decide(report: ProbeReport) -> tuple[Strategy, list[str], list[tuple[str, str]]]:
     """Rank every viable strategy rather than forcing a single answer.
@@ -185,14 +216,24 @@ def _decide(report: ProbeReport) -> tuple[Strategy, list[str], list[tuple[str, s
 
     payloads = [
         h for h in report.hydration
-        if h[2] >= MIN_HYDRATION_BYTES and "ld+json" not in h[0]
+        if h[2] >= MIN_HYDRATION_BYTES and "ld+json" not in h[0] and h[3]
     ]
     if payloads:
         names = ", ".join(f"{h[0]} (~{h[2]:,}b)" for h in payloads)
         viable.append((Strategy.HYDRATION,
                        f"embedded state in the served HTML: {names}"))
 
-    thin_text = report.text_ratio < 0.05
+    unparseable = [
+        h for h in report.hydration
+        if h[2] >= MIN_HYDRATION_BYTES and "ld+json" not in h[0] and not h[3]
+    ]
+
+    # Absolute volume, not ratio. On a modern framework the payload is dominated
+    # by JavaScript bundles whether or not the content was server-rendered, so a
+    # fully-rendered page can still sit at 4% text. What separates a shell from a
+    # rendered page is having almost no readable text at all.
+    thin_text = (report.visible_chars < MIN_RENDERED_CHARS
+                 and report.visible_lines < MIN_RENDERED_LINES)
     if report.endpoints and (thin_text or report.loading_markers or not report.visible_lines):
         viable.append((Strategy.JSON,
                        f"{len(report.endpoints)} candidate data endpoint(s) referenced"))
@@ -209,16 +250,28 @@ def _decide(report: ProbeReport) -> tuple[Strategy, list[str], list[tuple[str, s
         if report.loading_markers:
             reasons.append(f"loading placeholder served: {report.loading_markers[0]!r}")
         reasons.append(
-            f"only {report.visible_chars} chars of visible text in "
-            f"{report.html_bytes} bytes ({report.text_ratio:.1%})"
+            f"only {report.visible_chars} chars of visible text across "
+            f"{report.visible_lines} line(s)"
         )
-        reasons.append("no embedded state and no data endpoint found, so JS must run")
+        if unparseable:
+            names = ", ".join(h[0] for h in unparseable)
+            reasons.append(
+                f"embedded state present ({names}) but it is a JavaScript "
+                f"expression, not JSON, so hydration capture cannot read it"
+            )
+        reasons.append("no readable embedded state and no data endpoint, so JS must run")
         return Strategy.BROWSER, reasons, []
 
     viable.sort(key=lambda item: _PREFERENCE.index(item[0]))
     primary, why = viable[0]
 
     reasons = [why]
+    if unparseable and primary is not Strategy.HYDRATION:
+        names = ", ".join(h[0] for h in unparseable)
+        reasons.append(
+            f"embedded state present ({names}) but it is a JavaScript "
+            f"expression, not JSON, so hydration capture cannot read it"
+        )
     if report.loading_markers and primary is not Strategy.STATIC:
         reasons.append(f"loading placeholder served: {report.loading_markers[0]!r}")
 
@@ -236,21 +289,26 @@ def probe(html: str, url: str, profile: Profile,
 
     report.frameworks = [(s.name, s.note) for s in _find(FRAMEWORKS, html)]
     report.hydration = [
-        (s.name, s.note, _hydration_payload_size(html, s))
+        (s.name, s.note, *_hydration_payload(html, s))
         for s in _find(HYDRATION_MARKERS, html)
     ]
     report.endpoints = _endpoints(html, url)
     report.scripts = sorted(set(_SCRIPT_SRC.findall(html)))[:25]
 
+    visible_lines: list[str] = []
     try:
         page = extract_html(html, profile, side="probe", label=url, allow_unrendered=True)
+        visible_lines = page.lines
         report.visible_lines = len(page.lines)
         report.visible_chars = sum(len(line) for line in page.lines)
     except Exception:
         report.visible_lines = 0
         report.visible_chars = 0
 
-    report.loading_markers = sorted({m.strip() for m in _LOADING.findall(html)})[:5]
+    # Only text a reader would actually see counts as a placeholder.
+    report.loading_markers = sorted({
+        line.strip() for line in visible_lines if _LOADING.match(line)
+    })[:5]
     report.strategy, report.reasons, report.alternatives = _decide(report)
     return report
 

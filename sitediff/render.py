@@ -286,7 +286,9 @@ def render_probe(report, console: Console) -> None:
             or ["[dim]none recognised[/]"])
 
     section("Embedded state",
-            [f"{name}  [dim]{note}, ~{size:,} bytes[/]" for name, note, size in report.hydration])
+            [f"{name}  [dim]{note}, ~{size:,} bytes"
+             + ("" if ok else ", NOT JSON-parseable") + "[/]"
+             for name, note, size, ok in report.hydration])
 
     section("Candidate data endpoints  [dim](what the Network tab would show)[/]",
             report.endpoints[:15])
