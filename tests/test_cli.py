@@ -258,3 +258,77 @@ def test_accept_is_idempotent(capsys, tmp_path):
     code, out, _ = run(capsys, "accept", LEGACY, OPTIMISED, "--accept-file", str(store))
     assert code == EXIT_CLEAN
     assert "Nothing new to accept" in out
+
+
+# --- discoverability ---------------------------------------------------------
+
+def test_help_lists_every_command_and_flag(capsys):
+    """Per-command --help means running it once per command to find an option
+    you did not know existed. This prints the lot."""
+    code, out, _ = run(capsys, "help")
+    assert code == EXIT_CLEAN
+    for command in ("compare", "run", "accept", "probe", "har", "runs",
+                    "fetch", "extract", "profiles", "sources"):
+        assert command in out, command
+    for flag in ("--profile", "--side-by-side", "--baseline", "--capture",
+                 "--accept-file", "--placeholder", "--limit", "--no-structure"):
+        assert flag in out, flag
+    assert "Exit codes" in out and "SITEDIFF_PROFILES" in out
+
+
+def test_help_shows_short_forms_alongside_long_ones(capsys):
+    _, out, _ = run(capsys, "help")
+    for pair in ("-p, --profile", "-s, --side-by-side", "-o, --html",
+                 "-b, --baseline", "-c, --capture", "-A, --accept-file"):
+        assert pair in out, pair
+
+
+def test_help_shows_command_aliases(capsys):
+    _, out, _ = run(capsys, "help")
+    assert "(or c, diff)" in out
+    assert "(or p)" in out
+
+
+def test_every_command_has_a_description(capsys):
+    """A command with no summary is invisible in the overview."""
+    import argparse as _argparse
+
+    from sitediff.cli import build_parser
+    subparsers = next(a for a in build_parser()._actions
+                      if isinstance(a, _argparse._SubParsersAction))
+    missing = [name for name, sp in subparsers.choices.items() if not sp.description]
+    assert not missing, f"commands without a description: {missing}"
+
+
+@pytest.mark.parametrize("alias,expected", [
+    ("c", "compare"), ("diff", "compare"), ("x", "extract"), ("p", "probe"),
+    ("rs", "runs"), ("pf", "profiles"), ("s", "sources"),
+])
+def test_aliases_dispatch_to_the_same_handler(alias, expected):
+    from sitediff.cli import COMMAND_ALIASES
+    assert alias in COMMAND_ALIASES[expected]
+
+
+def test_an_alias_actually_runs(capsys):
+    code, out, _ = run(capsys, "diff", LEGACY, LEGACY, "-q")
+    assert code == EXIT_CLEAN
+    assert "CLEAN" in out
+
+
+def test_readme_documents_every_command():
+    """The command reference is generated from the parser, so it must not drift
+    away from it."""
+    import argparse as _argparse
+
+    from sitediff.cli import build_parser
+    readme = (pathlib.Path(__file__).resolve().parent.parent / "README.md").read_text()
+    subparsers = next(a for a in build_parser()._actions
+                      if isinstance(a, _argparse._SubParsersAction))
+    seen, missing = set(), []
+    for name, sp in subparsers.choices.items():
+        if id(sp) in seen:
+            continue
+        seen.add(id(sp))
+        if f"#### `sitediff {name}`" not in readme:
+            missing.append(name)
+    assert not missing, f"commands missing from the README: {missing}"

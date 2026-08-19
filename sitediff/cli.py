@@ -37,6 +37,14 @@ from .source import EgressPolicy, Source, fetch
 
 SOURCE_REF = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+):(?P<path>/.*)?$")
 
+# Short aliases per subcommand, unambiguous with one another. Registered in the
+# handler map so dispatch never cares which spelling was typed.
+COMMAND_ALIASES = {
+    "compare": ["c", "diff"], "run": ["r"], "runs": ["rs"], "accept": ["a"],
+    "probe": ["p"], "har": ["h"], "fetch": ["f"], "extract": ["x"],
+    "profiles": ["pf"], "sources": ["s"], "help": ["?"],
+}
+
 EXIT_CLEAN, EXIT_DRIFT, EXIT_ERROR = 0, 1, 2
 
 
@@ -48,86 +56,147 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"sitediff {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    cmp_p = sub.add_parser("compare", help="diff two saved HTML pages")
+    cmp_p = sub.add_parser(
+        "compare",
+        aliases=["c", "diff"],
+        description="diff two pages, from files, URLs or configured sources",
+        help="diff two saved HTML pages",
+    )
     cmp_p.add_argument("left", help="saved HTML file, URL, or source:/path (reference side)")
     cmp_p.add_argument("right", help="saved HTML file, URL, or source:/path (candidate side)")
-    cmp_p.add_argument("-p", "--profile", help="built-in profile name or path to a .toml")
+    cmp_p.add_argument("-p", "--profile", help="profile name or path to a .toml")
     cmp_p.add_argument("-s", "--side-by-side", action="store_true", help="two-column view")
-    cmp_p.add_argument("--html", metavar="PATH", help="also write a standalone HTML report")
+    cmp_p.add_argument("-o", "--html", metavar="PATH",
+                       help="also write a standalone HTML report")
     cmp_p.add_argument(
-        "--baseline", nargs=2, metavar=("CAPTURE_A", "CAPTURE_B"),
+        "-b", "--baseline", nargs=2, metavar=("CAPTURE_A", "CAPTURE_B"),
         help="two captures of the SAME side; anything differing between them is "
              "treated as inherent noise and suppressed from the main diff",
     )
-    cmp_p.add_argument("--context", type=int, metavar="N", help="context lines around each change")
+    cmp_p.add_argument("-C", "--context", type=int, metavar="N",
+                       help="context lines around each change")
     cmp_p.add_argument("--allow-unrendered", action="store_true",
                        help="compare even if a page still shows a loading placeholder")
     cmp_p.add_argument("--no-color", action="store_true", help="disable colour output")
     cmp_p.add_argument("-q", "--quiet", action="store_true", help="summary only, no diff body")
-    cmp_p.add_argument("--capture", choices=[c.value for c in Capture], default="",
+    cmp_p.add_argument("-c", "--capture", choices=[c.value for c in Capture], default="",
                        help="override the capture strategy for both sides")
     cmp_p.add_argument("--no-structure", action="store_true",
                        help="skip the element comparison, compare text only")
-    cmp_p.add_argument("--accept-file", metavar="PATH",
+    cmp_p.add_argument("-A", "--accept-file", metavar="PATH",
                        help="accepted-difference store (default .sitediff/accepted.toml)")
 
-    ex_p = sub.add_parser("extract", help="show the visible lines pulled from one page")
-    ex_p.add_argument("page")
-    ex_p.add_argument("-p", "--profile")
+    ex_p = sub.add_parser(
+        "extract",
+        aliases=["x"],
+        description="show the visible lines pulled from one page",
+        help="show the visible lines pulled from one page",
+    )
+    ex_p.add_argument("page", help="saved HTML file, URL, or source:/path")
+    ex_p.add_argument("-p", "--profile", help="profile name or path to a .toml")
     ex_p.add_argument("-n", "--numbers", action="store_true", help="prefix line numbers")
-    ex_p.add_argument("--allow-unrendered", action="store_true")
+    ex_p.add_argument("--allow-unrendered", action="store_true",
+                      help="extract even if the page shows a loading placeholder")
 
-    f_p = sub.add_parser("fetch", help="fetch one page and report how it was served")
+    f_p = sub.add_parser(
+        "fetch",
+        aliases=["f"],
+        description="fetch one page and report how it was served",
+        help="fetch one page and report how it was served",
+    )
     f_p.add_argument("target", help="URL or source:/path")
-    f_p.add_argument("-p", "--profile")
-    f_p.add_argument("--body", action="store_true", help="also print extracted lines")
+    f_p.add_argument("-p", "--profile", help="profile name or path to a .toml")
+    f_p.add_argument("-b", "--body", action="store_true", help="also print extracted lines")
 
     pr_p = sub.add_parser(
-        "probe", help="work out how a page delivers its values, and what it is built with")
+        "probe",
+        aliases=["p"],
+        description="work out how a page delivers its values, and what it is built with",
+        help="work out how a page delivers its values, and what it is built with",
+    )
     pr_p.add_argument("target", help="URL, source:/path, or a saved HTML file")
-    pr_p.add_argument("-p", "--profile")
-    pr_p.add_argument("--suggest", action="store_true",
+    pr_p.add_argument("-p", "--profile", help="profile name or path to a .toml")
+    pr_p.add_argument("-s", "--suggest", action="store_true",
                       help="print a profile fragment you can paste and edit")
 
     run_p = sub.add_parser(
-        "run", help="compare every paired entity and aggregate the outcome")
-    run_p.add_argument("-p", "--profile", required=True)
-    run_p.add_argument("--limit", type=int, default=0, metavar="N",
+        "run",
+        aliases=["r"],
+        description="compare every paired entity on every page type, and aggregate",
+        help="compare every paired entity and aggregate the outcome",
+    )
+    run_p.add_argument("-p", "--profile", required=True, help="profile name or path to a .toml")
+    run_p.add_argument("-l", "--limit", type=int, default=0, metavar="N",
                        help="stop after N entities, for a smoke test")
-    run_p.add_argument("--db", metavar="PATH", help="results database (default .sitediff/runs.db)")
-    run_p.add_argument("--accept-file", metavar="PATH")
-    run_p.add_argument("--html", metavar="PATH", help="write a run report")
-    run_p.add_argument("--show", type=int, default=25, help="rows of detail to print")
-    run_p.add_argument("--no-color", action="store_true")
+    run_p.add_argument("-d", "--db", metavar="PATH",
+                       help="results database (default .sitediff/runs.db)")
+    run_p.add_argument("-A", "--accept-file", metavar="PATH",
+                       help="accepted-difference store (default .sitediff/accepted.toml)")
+    run_p.add_argument("-o", "--html", metavar="PATH",
+                       help="write a run report")
+    run_p.add_argument("-w", "--show", type=int, default=25, help="rows of detail to print")
+    run_p.add_argument("--no-color", action="store_true", help="disable colour output")
 
     acc_p = sub.add_parser(
-        "accept", help="record the current differences as intentional")
-    acc_p.add_argument("left")
-    acc_p.add_argument("right")
-    acc_p.add_argument("-p", "--profile")
-    acc_p.add_argument("--capture", choices=[c.value for c in Capture], default="")
-    acc_p.add_argument("--accept-file", metavar="PATH")
-    acc_p.add_argument("--reason", default="", help="why this difference is expected")
-    acc_p.add_argument("--dry-run", action="store_true",
+        "accept",
+        aliases=["a"],
+        description="record the current differences as intentional",
+        help="record the current differences as intentional",
+    )
+    acc_p.add_argument("left", help="reference side")
+    acc_p.add_argument("right", help="candidate side")
+    acc_p.add_argument("-p", "--profile", help="profile name or path to a .toml")
+    acc_p.add_argument("-c", "--capture", choices=[c.value for c in Capture], default="",
+                       help="override the capture strategy for both sides")
+    acc_p.add_argument("-A", "--accept-file", metavar="PATH",
+                       help="accepted-difference store (default .sitediff/accepted.toml)")
+    acc_p.add_argument("-r", "--reason", default="", help="why this difference is expected")
+    acc_p.add_argument("-n", "--dry-run", action="store_true",
                        help="show what would be accepted, write nothing")
 
-    runs_p = sub.add_parser("runs", help="list recent runs")
-    runs_p.add_argument("--db", metavar="PATH")
+    runs_p = sub.add_parser(
+        "runs",
+        aliases=["rs"],
+        description="list recent runs",
+        help="list recent runs",
+    )
+    runs_p.add_argument("-d", "--db", metavar="PATH",
+                        help="results database (default .sitediff/runs.db)")
 
     har_p = sub.add_parser(
-        "har", help="read a browser HAR export and find the site's data endpoints")
+        "har",
+        aliases=["h"],
+        description="read a browser HAR export and find the site's data endpoints",
+        help="read a browser HAR export and find the site's data endpoints",
+    )
     har_p.add_argument("file", help="path to a .har exported from devtools")
-    har_p.add_argument("--all", action="store_true",
+    har_p.add_argument("-a", "--all", action="store_true",
                        help="list every endpoint, not only those carrying data")
-    har_p.add_argument("--suggest", action="store_true",
+    har_p.add_argument("-s", "--suggest", action="store_true",
                        help="print a profile fragment wiring up the data endpoints")
-    har_p.add_argument("--placeholder", action="append", default=[], metavar="VALUE=NAME",
+    har_p.add_argument("-P", "--placeholder", action="append", default=[], metavar="VALUE=NAME",
                        help="replace a captured parameter value with {NAME} in the "
                             "suggested body, e.g. --placeholder 1234=key. Repeatable")
 
-    sub.add_parser("profiles", help="list the built-in profiles")
-    src_p = sub.add_parser("sources", help="list sources and the egress allowlist")
-    src_p.add_argument("-p", "--profile")
+    sub.add_parser(
+        "help",
+        aliases=["?"],
+        description="show every command and every option at once",
+        help="show every command and every option at once",
+    )
+    sub.add_parser(
+        "profiles",
+        aliases=["pf"],
+        description="list profiles and the directories searched for them",
+        help="list the built-in profiles",
+    )
+    src_p = sub.add_parser(
+        "sources",
+        aliases=["s"],
+        description="list a profile's sources and its egress allowlist",
+        help="list sources and the egress allowlist",
+    )
+    src_p.add_argument("-p", "--profile", help="profile name or path to a .toml")
     return parser
 
 
@@ -510,6 +579,59 @@ def cmd_sources(args) -> int:
     return EXIT_CLEAN
 
 
+def cmd_help(args) -> int:
+    """Every command and every flag on one screen.
+
+    Per-command --help exists, but discovering an option you did not know to
+    look for means running it once per command. This prints the lot.
+    """
+    console = make_console()
+    parser = build_parser()
+    subparsers = next(
+        action for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+
+    console.print(f"\n  [bold]sitediff {__version__}[/]")
+    console.print("  Compare the visible content of two renderings of the same "
+                  "page, across environments.\n", style="dim")
+
+    seen: set[int] = set()
+    for name, subparser in subparsers.choices.items():
+        if id(subparser) in seen:      # aliases share their parser object
+            continue
+        seen.add(id(subparser))
+        summary = subparser.description or ""
+        alias_note = ""
+        if COMMAND_ALIASES.get(name):
+            alias_note = f"  [dim](or {', '.join(COMMAND_ALIASES[name])})[/]"
+        console.print(f"  [bold cyan]{name}[/]{alias_note}  [dim]{summary}[/]")
+        rows = []
+        for action in subparser._actions:
+            if action.dest == "help":
+                continue
+            flags = ", ".join(action.option_strings) or f"<{action.dest}>"
+            hint = (action.help or "").replace("\n", " ")
+            if getattr(action, "choices", None):
+                hint += f"  ({'|'.join(str(c) for c in action.choices)})"
+            rows.append((flags, hint))
+        if rows:
+            width = min(34, max(len(f) for f, _ in rows))
+            for flags, hint in rows:
+                console.print(f"      {flags:<{width}}  [dim]{hint}[/]", highlight=False)
+        console.print()
+
+    console.print("  [bold]Exit codes[/]")
+    console.print("      0  the two sides agree", style="dim")
+    console.print("      1  drift was found", style="dim")
+    console.print("      2  the run failed", style="dim")
+    console.print("\n  [bold]Environment[/]")
+    console.print("      SITEDIFF_PROFILES  extra profile directories", style="dim")
+    console.print("      NO_COLOR           disable colour output", style="dim")
+    console.print()
+    return EXIT_CLEAN
+
+
 def cmd_profiles(args) -> int:
     console = make_console()
     rows = discover_profiles()
@@ -532,11 +654,18 @@ def cmd_profiles(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    handlers = {
+    canonical = {
         "compare": cmd_compare, "extract": cmd_extract, "profiles": cmd_profiles,
         "fetch": cmd_fetch, "sources": cmd_sources, "probe": cmd_probe,
         "run": cmd_run, "accept": cmd_accept, "runs": cmd_runs, "har": cmd_har,
+        "help": cmd_help,
     }
+    # Aliases dispatch to the same handler, so nothing downstream needs to know
+    # which spelling was typed.
+    handlers = dict(canonical)
+    for name, aliases in COMMAND_ALIASES.items():
+        for alias in aliases:
+            handlers[alias] = canonical[name]
     try:
         return handlers[args.command](args)
     except SiteDiffError as exc:

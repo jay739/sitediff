@@ -28,6 +28,152 @@ boilerplate.
 sitediff pairs pages across sites that disagree about URLs, subtracts the noise
 each side generates on its own, and reports what is left.
 
+## What you must provide
+
+This is a **diff engine**. It ships no knowledge of any site, and it will not
+work until you tell it about yours. Concretely, you supply:
+
+| You provide | Why | How to get it |
+|---|---|---|
+| **Two things to compare** | The tool never guesses what to fetch | Two saved HTML files, two URLs, or two sources in a profile |
+| **A profile** for anything beyond a one-off file diff | All site knowledge lives here, none in the package | Copy the bundled `example` profile into `./.sitediff/` |
+| **Hosts in `[security] allow_hosts`** | Nothing is contacted unless you name it. The default allowlist is empty and blocks everything | The hostnames of the two environments |
+| **How each side delivers values** | HTML, embedded state, or a data endpoint: this cannot be inferred reliably | `sitediff probe <url>` tells you; `sitediff har <file>` finds endpoints |
+| **URL templates containing `{key}`** | Two codebases disagree about URLs; pairing is on an entity key, not a path | Read them off the two sites |
+| **How to enumerate entities**, for a `run` | The tool will not crawl anything you have not pointed it at | A key list, a listing endpoint (`[pair.discover]`), or a seed to crawl (`[pair.crawl]`) |
+| **Which region of each page holds the data** | Two codebases have different DOMs, so one selector set rarely fits both | `[extract.left]` and `[extract.right]` |
+| **Network access to both sides** | It runs where you run it and has no other route in | Run it from a machine that can reach both |
+
+It does **not** provide: a crawler that works without configuration, credentials
+or session handling, knowledge of your URL scheme, or any judgement about which
+differences are acceptable. That last one is `sitediff accept`, and it is
+deliberately a reviewed decision rather than a heuristic.
+
+## Command reference
+
+`sitediff help` prints every command and every flag on one screen. Each command
+also has its own `--help`.
+
+#### `sitediff compare`  (`c`, `diff`)
+
+diff two pages, from files, URLs or configured sources
+
+| Flag | Purpose |
+|---|---|
+| `<left>` | saved HTML file, URL, or source:/path (reference side) |
+| `<right>` | saved HTML file, URL, or source:/path (candidate side) |
+| `-p`, `--profile` | profile name or path to a .toml |
+| `-s`, `--side-by-side` | two-column view |
+| `-o`, `--html` | also write a standalone HTML report |
+| `-b`, `--baseline` | two captures of the SAME side; anything differing between them is treated as inherent noise and suppressed from the main diff |
+| `-C`, `--context` | context lines around each change |
+| `--allow-unrendered` | compare even if a page still shows a loading placeholder |
+| `--no-color` | disable colour output |
+| `-q`, `--quiet` | summary only, no diff body |
+| `-c`, `--capture` | override the capture strategy for both sides — one of `static`, `hydration`, `json`, `browser` |
+| `--no-structure` | skip the element comparison, compare text only |
+| `-A`, `--accept-file` | accepted-difference store (default .sitediff/accepted.toml) |
+
+#### `sitediff extract`  (`x`)
+
+show the visible lines pulled from one page
+
+| Flag | Purpose |
+|---|---|
+| `<page>` | saved HTML file, URL, or source:/path |
+| `-p`, `--profile` | profile name or path to a .toml |
+| `-n`, `--numbers` | prefix line numbers |
+| `--allow-unrendered` | extract even if the page shows a loading placeholder |
+
+#### `sitediff fetch`  (`f`)
+
+fetch one page and report how it was served
+
+| Flag | Purpose |
+|---|---|
+| `<target>` | URL or source:/path |
+| `-p`, `--profile` | profile name or path to a .toml |
+| `-b`, `--body` | also print extracted lines |
+
+#### `sitediff probe`  (`p`)
+
+work out how a page delivers its values, and what it is built with
+
+| Flag | Purpose |
+|---|---|
+| `<target>` | URL, source:/path, or a saved HTML file |
+| `-p`, `--profile` | profile name or path to a .toml |
+| `-s`, `--suggest` | print a profile fragment you can paste and edit |
+
+#### `sitediff run`  (`r`)
+
+compare every paired entity on every page type, and aggregate
+
+| Flag | Purpose |
+|---|---|
+| `-p`, `--profile` | profile name or path to a .toml |
+| `-l`, `--limit` | stop after N entities, for a smoke test |
+| `-d`, `--db` | results database (default .sitediff/runs.db) |
+| `-A`, `--accept-file` | accepted-difference store (default .sitediff/accepted.toml) |
+| `-o`, `--html` | write a run report |
+| `-w`, `--show` | rows of detail to print |
+| `--no-color` | disable colour output |
+
+#### `sitediff accept`  (`a`)
+
+record the current differences as intentional
+
+| Flag | Purpose |
+|---|---|
+| `<left>` | reference side |
+| `<right>` | candidate side |
+| `-p`, `--profile` | profile name or path to a .toml |
+| `-c`, `--capture` | override the capture strategy for both sides — one of `static`, `hydration`, `json`, `browser` |
+| `-A`, `--accept-file` | accepted-difference store (default .sitediff/accepted.toml) |
+| `-r`, `--reason` | why this difference is expected |
+| `-n`, `--dry-run` | show what would be accepted, write nothing |
+
+#### `sitediff runs`  (`rs`)
+
+list recent runs
+
+| Flag | Purpose |
+|---|---|
+| `-d`, `--db` | results database (default .sitediff/runs.db) |
+
+#### `sitediff har`  (`h`)
+
+read a browser HAR export and find the site's data endpoints
+
+| Flag | Purpose |
+|---|---|
+| `<file>` | path to a .har exported from devtools |
+| `-a`, `--all` | list every endpoint, not only those carrying data |
+| `-s`, `--suggest` | print a profile fragment wiring up the data endpoints |
+| `-P`, `--placeholder` | replace a captured parameter value with {NAME} in the suggested body, e.g. --placeholder 1234=key. Repeatable |
+
+#### `sitediff help`  (`?`)
+
+show every command and every option at once
+
+| Flag | Purpose |
+|---|---|
+
+#### `sitediff profiles`  (`pf`)
+
+list profiles and the directories searched for them
+
+| Flag | Purpose |
+|---|---|
+
+#### `sitediff sources`  (`s`)
+
+list a profile's sources and its egress allowlist
+
+| Flag | Purpose |
+|---|---|
+| `-p`, `--profile` | profile name or path to a .toml |
+
 ## Install
 
 ```
