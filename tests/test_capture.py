@@ -222,3 +222,70 @@ def test_run_report_renders_a_sortable_table():
     out = build_run_report(report, Profile())
     assert "data-sortable" in out
     assert "4002" in out
+
+
+# --- side-by-side layout -----------------------------------------------------
+
+def text_result(left_lines, right_lines):
+    from sitediff.engine import compare
+    return compare(Page("a.html", "left", left_lines),
+                   Page("b.html", "right", right_lines), Profile())
+
+
+def test_report_emits_both_layouts_with_split_first():
+    """Side by side answers 'what does each side say', which is the question a
+    migration check is actually asking, so it is what opens first."""
+    out = build_html_report(text_result(["same", "old value"], ["same", "new value"]),
+                            Profile())
+    assert 'data-view="split"' in out
+    assert 'data-view="unified" hidden' in out
+    assert out.index('data-view="split"') < out.index('data-view="unified"')
+
+
+def test_side_by_side_puts_a_changed_line_on_one_row():
+    out = build_html_report(text_result(["old value"], ["new value"]), Profile())
+    assert 'class="sxs-alter"' in out
+    # one row carries both sides, rather than a removal row then an addition row
+    assert out.count('class="sxs-alter"') == 1
+
+
+def test_side_by_side_marks_only_the_words_that_moved():
+    out = build_html_report(text_result(["earned points 45"], ["earned points 91"]),
+                            Profile())
+    assert '<span class="w del">45</span>' in out
+    assert '<span class="w ins">91</span>' in out
+    assert '<span class="w del">earned</span>' not in out
+
+
+def test_unpaired_lines_get_their_own_row_per_side():
+    out = build_html_report(text_result(["keep", "gone"], ["keep"]), Profile())
+    assert 'class="sxs-remove"' in out
+    assert 'class="sxs-alter"' not in out
+
+
+def test_structured_results_have_no_layout_toggle():
+    """A field table has no second layout to switch to.
+
+    Asserted against the toggle's markup rather than the attribute name, which
+    also occurs inside the inlined script and would match either way.
+    """
+    result = compare_structured(page(), page("right"), Profile(), {"a": 1}, {"a": 2})
+    out = build_html_report(result, Profile())
+    assert '<div class="seg"' not in out
+    assert 'data-view-btn="split"' not in out
+    assert 'data-view="fields"' in out
+
+
+def test_text_results_do_have_a_layout_toggle():
+    out = build_html_report(text_result(["old"], ["new"]), Profile())
+    assert '<div class="seg"' in out
+    assert 'data-view-btn="split"' in out
+
+
+def test_side_by_side_alignment_matches_the_engine():
+    from sitediff.engine import side_by_side
+    result = text_result(["a", "old", "z"], ["a", "new", "z"])
+    rows = side_by_side(result.hunks[0])
+    kinds = [r.kind for r in rows]
+    assert kinds == ["equal", "alter", "equal"]
+    assert rows[1].left_no == 2 and rows[1].right_no == 2

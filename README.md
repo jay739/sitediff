@@ -452,11 +452,23 @@ is the reverse proxy failure that every status check reports as green.
 
 ## Reports
 
-`--html` writes a self-contained page: filter chips, text search (`/` to focus),
-collapsible sections, sortable run tables, a light/dark toggle that remembers
-your choice, and animations that disable themselves under
-`prefers-reduced-motion`. No external stylesheet, script, font or image, so it
-opens on a machine with no network.
+`--html` writes a self-contained page. No external stylesheet, script, font or
+image, so it opens on a machine with no network.
+
+**Two layouts, toggled in the toolbar and remembered between reports:**
+
+*Side by side* is the default. Each row shows what both versions say, with only
+the words that actually moved highlighted. That answers "what does each side
+say", which is the question a parity check is asking. A line present on one side
+only gets a hatched cell opposite it, so a gap reads as a gap rather than as
+blank space.
+
+*Unified* is the familiar `git diff` layout, better when reviewing an edit
+rather than comparing two versions.
+
+Also: filter chips, text search (`/` to focus, `Esc` to clear), collapsible
+sections, sortable run tables, a persisted light/dark toggle, and animations
+that disable themselves under `prefers-reduced-motion`.
 
 Worked examples, committed so you can see the output without running anything:
 

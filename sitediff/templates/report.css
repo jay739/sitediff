@@ -198,3 +198,50 @@ kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5p
     animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   html { scroll-behavior: auto; }
 }
+
+/* ---- side-by-side ---- */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px;
+       overflow: hidden; background: var(--raised); }
+.seg-btn { border: 0; background: transparent; color: var(--muted); cursor: pointer;
+           font: inherit; font-size: .82rem; padding: .35rem .85rem; transition: all .18s; }
+.seg-btn + .seg-btn { border-left: 1px solid var(--line); }
+.seg-btn:hover { color: var(--fg); }
+.seg-btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent);
+                                font-weight: 600; }
+.seg-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+table.sxs { table-layout: fixed; width: 100%; min-width: 760px; }
+table.sxs col.cn { width: 3.5rem; }
+table.sxs thead th {
+  position: sticky; top: 54px; z-index: 5; text-align: left;
+  padding: .45rem .75rem; background: var(--surface); color: var(--muted);
+  font-size: .72rem; letter-spacing: .07em; text-transform: uppercase;
+  border-bottom: 1px solid var(--line); font-weight: 650;
+}
+table.sxs thead th + th { border-left: 1px solid var(--line); }
+table.sxs td.side { border-left: 1px solid var(--line-soft); }
+table.sxs td.side.l { border-left: 0; }
+
+/* Each column is tinted by what happened to that side, so a changed row reads
+   as removed on the left and added on the right rather than one flat colour. */
+.sxs-alter  td.side.l { background: var(--del-bg); color: var(--del); }
+.sxs-alter  td.side.r { background: var(--add-bg); color: var(--add); }
+.sxs-remove td.side.l { background: var(--del-bg); color: var(--del); }
+.sxs-remove td.side.r { background: repeating-linear-gradient(
+    -45deg, transparent, transparent 6px, var(--line-soft) 6px, var(--line-soft) 7px); }
+.sxs-add    td.side.r { background: var(--add-bg); color: var(--add); }
+.sxs-add    td.side.l { background: repeating-linear-gradient(
+    -45deg, transparent, transparent 6px, var(--line-soft) 6px, var(--line-soft) 7px); }
+.sxs-equal  td.side { color: var(--muted); }
+
+/* Word-level: only the tokens that actually moved carry emphasis. */
+.w { border-radius: 3px; padding: 0 2px; font-weight: 600; }
+.w.del { background: color-mix(in srgb, var(--del-edge) 55%, transparent); }
+.w.ins { background: color-mix(in srgb, var(--add-edge) 55%, transparent); }
+
+[data-view][hidden] { display: none; }
+
+@media (max-width: 700px) {
+  table.sxs { min-width: 520px; }
+  table.sxs col.cn { width: 2.4rem; }
+}

@@ -16,7 +16,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from .config import Profile
-from .engine import DiffResult, Op, Status
+from .engine import DiffResult, Op, Status, side_by_side
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 RING_RADIUS = 26
@@ -83,14 +83,37 @@ def _shell(title: str, badge: str, subtitle: str, body: str) -> str:
 """
 
 
-def _toolbar(kinds: list[tuple[str, str]], findings: int) -> str:
+def _views(result: DiffResult) -> str:
+    """Both layouts are emitted; the toggle swaps which one is shown.
+
+    Side by side answers "what does each side say", which is the question
+    someone verifying a migration is actually asking. Unified answers "what
+    changed", which is the right frame for reviewing an edit. Neither is
+    universally better, so the report ships both instead of picking one.
+    """
+    if result.structured:
+        return f'<div data-view="fields">{_fields(result)}</div>'
+    return (f'<div data-view="split">{_hunks_sxs(result)}</div>'
+            f'<div data-view="unified" hidden>{_hunks(result)}</div>')
+
+
+def _toolbar(kinds: list[tuple[str, str]], findings: int, views: bool = False) -> str:
     chips = "".join(
         f'<button class="chip" type="button" data-filter="{k}" '
         f'aria-pressed="{"true" if k == "all" else "false"}">{_esc(label)}</button>'
         for k, label in kinds
     )
+    view_toggle = ""
+    if views:
+        view_toggle = (
+            '<div class="seg" role="group" aria-label="Layout">'
+            '<button class="seg-btn" type="button" data-view-btn="split" '
+            'aria-pressed="true">Side by side</button>'
+            '<button class="seg-btn" type="button" data-view-btn="unified" '
+            'aria-pressed="false">Unified</button></div>'
+        )
     return (
-        f'<div class="toolbar">{chips}'
+        f'<div class="toolbar">{chips}{view_toggle}'
         f'<input class="search" id="search" type="search" '
         f'placeholder="Filter by text…" aria-label="Filter findings">'
         f'<button class="icon-btn" id="expand-all" type="button">Collapse all</button>'
@@ -132,6 +155,48 @@ def _fields(result: DiffResult) -> str:
     return ('<div class="panel"><div class="rows"><table><thead><tr>'
             "<th></th><th>field</th><th>left</th><th>right</th></tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table></div></div>")
+
+
+def _segments(parts, side: str) -> str:
+    """Render word-level runs, marking only the words that actually moved."""
+    out = []
+    for text, changed in parts:
+        cell = _esc(text)
+        out.append(f'<span class="w {side}">{cell}</span>' if changed else cell)
+    return "".join(out) or "&nbsp;"
+
+
+def _hunks_sxs(result: DiffResult) -> str:
+    """Two-column view: what each side says, on the same row."""
+    blocks = []
+    for hunk in result.hunks:
+        rows = []
+        adds = sum(1 for ln in hunk.lines if ln.op is Op.ADD)
+        dels = sum(1 for ln in hunk.lines if ln.op is Op.REMOVE)
+        for row in side_by_side(hunk):
+            left_cls = "" if row.kind in ("equal", "add") else f" {row.kind}"
+            right_cls = "" if row.kind in ("equal", "remove") else f" {row.kind}"
+            rows.append(
+                f'<tr class="sxs-{row.kind}" data-op="{row.kind}">'
+                f'<td class="n">{row.left_no or ""}</td>'
+                f'<td class="t side{left_cls}">{_segments(row.left, "del")}</td>'
+                f'<td class="n">{row.right_no or ""}</td>'
+                f'<td class="t side{right_cls}">{_segments(row.right, "ins")}</td>'
+                f"</tr>"
+            )
+        blocks.append(
+            f'<details class="hunk" open><summary><span class="chev">&rsaquo;</span>'
+            f'<span class="mono">{_esc(hunk.header)}</span>'
+            f'<span class="tally">+{adds} &minus;{dels}</span></summary>'
+            f'<div class="rows"><table class="sxs"><colgroup>'
+            f'<col class="cn"><col><col class="cn"><col></colgroup>'
+            f'<thead><tr><th colspan="2">left</th><th colspan="2">right</th></tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table></div></details>'
+        )
+    if not blocks:
+        return ('<div class="empty-state"><div class="big">&check;</div>'
+                "No differences in visible content.</div>")
+    return "".join(blocks)
 
 
 def _hunks(result: DiffResult) -> str:
@@ -181,8 +246,8 @@ def build_html_report(result: DiffResult, profile: Profile) -> str:
     body = (
         f'<div class="tiles">{"".join(tiles)}</div>'
         f"{_meta(result)}"
-        f"{_toolbar(kinds, result.changed)}"
-        f"{_fields(result) if result.structured else _hunks(result)}"
+        f"{_toolbar(kinds, result.changed, views=not result.structured)}"
+        f"{_views(result)}"
     )
     subtitle = f"profile: {profile.name} · {Path(result.left.path).name} vs " \
                f"{Path(result.right.path).name}"

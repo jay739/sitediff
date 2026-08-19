@@ -26,7 +26,14 @@
   }
 
   // ---- filtering ------------------------------------------------------------
-  var rows = Array.prototype.slice.call(document.querySelectorAll("[data-op]"));
+  function liveRows() {
+    // Only rows in the visible pane matter; the hidden layout holds a parallel
+    // copy of every row and would otherwise be counted twice.
+    return Array.prototype.slice.call(
+      document.querySelectorAll("[data-view]:not([hidden]) [data-op], " +
+                               "[data-op]:not([data-view] [data-op])"));
+  }
+  var rows = liveRows();
   var chips = Array.prototype.slice.call(document.querySelectorAll(".chip[data-filter]"));
   var search = document.getElementById("search");
   var counter = document.getElementById("visible-count");
@@ -58,6 +65,7 @@
   }
 
   function apply() {
+    rows = liveRows();
     var term = (search && search.value || "").trim().toLowerCase();
     var shown = 0;
     for (var i = 0; i < rows.length; i++) {
@@ -94,6 +102,41 @@
     });
   });
   if (search) search.addEventListener("input", apply);
+
+  // ---- layout toggle --------------------------------------------------------
+  var VIEW_KEY = "sitediff-view";
+  var viewButtons = Array.prototype.slice.call(
+    document.querySelectorAll("[data-view-btn]"));
+  var viewPanes = Array.prototype.slice.call(document.querySelectorAll("[data-view]"));
+
+  function setView(name) {
+    var matched = false;
+    viewPanes.forEach(function (pane) {
+      var mine = pane.getAttribute("data-view") === name;
+      pane.hidden = !mine;
+      if (mine) matched = true;
+    });
+    if (!matched) return;
+    viewButtons.forEach(function (button) {
+      button.setAttribute("aria-pressed",
+        String(button.getAttribute("data-view-btn") === name));
+    });
+    try { localStorage.setItem(VIEW_KEY, name); } catch (e) { /* ignore */ }
+    // Filters run per row, and the two layouts hold different rows, so the
+    // visible set has to be recomputed whenever the layout changes.
+    apply();
+  }
+
+  viewButtons.forEach(function (button) {
+    button.addEventListener("click", function () {
+      setView(button.getAttribute("data-view-btn"));
+    });
+  });
+  if (viewButtons.length) {
+    var preferred = null;
+    try { preferred = localStorage.getItem(VIEW_KEY); } catch (e) { /* ignore */ }
+    if (preferred) setView(preferred);
+  }
 
   // ---- expand / collapse ----------------------------------------------------
   var expand = document.getElementById("expand-all");

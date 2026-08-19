@@ -17,7 +17,7 @@ from rich.text import Text
 from rich.theme import Theme
 
 from .config import Mode
-from .engine import DiffResult, Hunk, Op, Status
+from .engine import DiffResult, Op, Status, pair_runs
 
 THEME = Theme(
     {
@@ -68,33 +68,6 @@ def _inline(old: str, new: str, base: str, emph: str, which: str) -> Text:
         if chunk:
             text.append(chunk, style=style)
     return text
-
-
-def _pair_runs(hunk: Hunk) -> dict[int, int]:
-    """Map index of a REMOVE line to the index of its matching ADD line.
-
-    Only pairs runs of equal length, where line N of the removals plainly
-    corresponds to line N of the additions. Anything else is left unpaired
-    rather than guessed at.
-    """
-    pairs: dict[int, int] = {}
-    i = 0
-    lines = hunk.lines
-    while i < len(lines):
-        if lines[i].op is not Op.REMOVE:
-            i += 1
-            continue
-        r_start = i
-        while i < len(lines) and lines[i].op is Op.REMOVE:
-            i += 1
-        a_start = i
-        while i < len(lines) and lines[i].op is Op.ADD:
-            i += 1
-        removes, adds = a_start - r_start, i - a_start
-        if removes and removes == adds:
-            for k in range(removes):
-                pairs[r_start + k] = a_start + k
-    return pairs
 
 
 def _gutter(left_no: int | None, right_no: int | None, width: int) -> Text:
@@ -165,7 +138,7 @@ def render_unified(result: DiffResult, console: Console) -> None:
     for hunk in result.hunks:
         console.print()
         console.print(Text(f"  {hunk.header}", style="diff.hunk"))
-        pairs = _pair_runs(hunk)
+        pairs = pair_runs(hunk)
         partners = {v: k for k, v in pairs.items()}
 
         for idx, line in enumerate(hunk.lines):
@@ -217,7 +190,7 @@ def render_side_by_side(result: DiffResult, console: Console) -> None:
         table.add_column("", style="diff.gutter", width=5, justify="right")
         table.add_column("right", overflow="fold", ratio=1)
 
-        pairs = _pair_runs(hunk)
+        pairs = pair_runs(hunk)
         consumed: set[int] = set()
 
         for idx, line in enumerate(hunk.lines):

@@ -409,3 +409,98 @@ def compare_structured(
     result.added = sum(1 for c in changes if c.op is Op.ADD)
     result.altered = sum(1 for c in changes if c.op is Op.ALTER)
     return result
+
+
+# --- alignment helpers shared by the terminal and HTML renderers --------------
+#
+# A unified diff lists removals then additions. A side-by-side view has to put
+# them back on the same row, and a word-level highlight needs to know which
+# removal corresponds to which addition. Both renderers need the same answer,
+# so the logic lives here rather than being duplicated per output format.
+
+_WORD = re.compile(r"\s+|\w+|[^\w\s]")
+
+
+def pair_runs(hunk: Hunk) -> dict[int, int]:
+    """Map the index of a REMOVE line to the index of its matching ADD line.
+
+    Only runs of equal length are paired, where removal N plainly corresponds to
+    addition N. Anything else is left unpaired rather than guessed at, because a
+    wrong pairing produces a confident and completely misleading word diff.
+    """
+    pairs: dict[int, int] = {}
+    lines = hunk.lines
+    i = 0
+    while i < len(lines):
+        if lines[i].op is not Op.REMOVE:
+            i += 1
+            continue
+        r_start = i
+        while i < len(lines) and lines[i].op is Op.REMOVE:
+            i += 1
+        a_start = i
+        while i < len(lines) and lines[i].op is Op.ADD:
+            i += 1
+        removes, adds = a_start - r_start, i - a_start
+        if removes and removes == adds:
+            for k in range(removes):
+                pairs[r_start + k] = a_start + k
+    return pairs
+
+
+def inline_segments(old: str, new: str) -> tuple[list[tuple[str, bool]],
+                                                 list[tuple[str, bool]]]:
+    """Split two lines into (text, changed) runs, aligned word by word.
+
+    Returns one list per side so each can be rendered independently while
+    agreeing on which words actually moved.
+    """
+    a, b = _WORD.findall(old), _WORD.findall(new)
+    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    left: list[tuple[str, bool]] = []
+    right: list[tuple[str, bool]] = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        changed = tag != "equal"
+        chunk_a, chunk_b = "".join(a[i1:i2]), "".join(b[j1:j2])
+        if chunk_a:
+            left.append((chunk_a, changed))
+        if chunk_b:
+            right.append((chunk_b, changed))
+    return left, right
+
+
+@dataclass(frozen=True)
+class SideBySideRow:
+    """One row of a two-column comparison."""
+
+    kind: str  # equal | alter | remove | add
+    left_no: int | None = None
+    right_no: int | None = None
+    left: list[tuple[str, bool]] = field(default_factory=list)
+    right: list[tuple[str, bool]] = field(default_factory=list)
+
+
+def side_by_side(hunk: Hunk) -> list[SideBySideRow]:
+    """Re-align a unified hunk into two columns."""
+    pairs = pair_runs(hunk)
+    consumed = set(pairs.values())
+    rows: list[SideBySideRow] = []
+
+    for index, line in enumerate(hunk.lines):
+        if index in consumed:
+            continue
+        if line.op is Op.EQUAL:
+            segment = [(line.text, False)]
+            rows.append(SideBySideRow("equal", line.left_no, line.right_no,
+                                      segment, list(segment)))
+        elif line.op is Op.REMOVE and index in pairs:
+            other = hunk.lines[pairs[index]]
+            left, right = inline_segments(line.text, other.text)
+            rows.append(SideBySideRow("alter", line.left_no, other.right_no, left, right))
+        elif line.op is Op.REMOVE:
+            rows.append(SideBySideRow("remove", line.left_no, None,
+                                      [(line.text, True)], []))
+        else:
+            rows.append(SideBySideRow("add", None, line.right_no,
+                                      [], [(line.text, True)]))
+    return rows
