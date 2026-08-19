@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from pathlib import Path
 from urllib.parse import urlparse
 
 from rich.text import Text
@@ -28,6 +29,7 @@ from .render import (
     render_probe,
     render_run,
     render_side_by_side,
+    render_structure,
     render_summary,
     render_unified,
 )
@@ -64,6 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
     cmp_p.add_argument("-q", "--quiet", action="store_true", help="summary only, no diff body")
     cmp_p.add_argument("--capture", choices=[c.value for c in Capture], default="",
                        help="override the capture strategy for both sides")
+    cmp_p.add_argument("--no-structure", action="store_true",
+                       help="skip the element comparison, compare text only")
     cmp_p.add_argument("--accept-file", metavar="PATH",
                        help="accepted-difference store (default .sitediff/accepted.toml)")
 
@@ -156,6 +160,27 @@ def fetch_url(url: str, profile: Profile):
     return fetch(url, Source(name="cli", base_url=url), policy)
 
 
+def attach_structure(result, left_payload, right_payload, profile: Profile,
+                     skip: bool = False) -> None:
+    """Compare the elements as well as the words, when both sides gave markup.
+
+    Text extraction discards the DOM, so a control that vanished or a table
+    that lost a column never appears in a content diff. Both `compare` and
+    `accept` need this, or accepting would record only half the findings and
+    a run would never come back clean.
+    """
+    if skip or left_payload.kind is not Kind.TEXT or right_payload.kind is not Kind.TEXT:
+        return
+    from . import structure as structure_mod
+
+    result.structure_report = structure_mod.compare(
+        structure_mod.build(left_payload.html, profile.for_side("left").parser),
+        structure_mod.build(right_payload.html, profile.for_side("right").parser),
+        Path(left_payload.label).name or "left",
+        Path(right_payload.label).name or "right",
+    )
+
+
 def _as_page(payload, profile: Profile, side: str, allow_unrendered: bool) -> Page:
     if payload.kind is Kind.TEXT:
         return extract_html(payload.html, profile.for_side(side), side=side,
@@ -204,6 +229,9 @@ def cmd_compare(args) -> int:
     else:
         result = compare(left, right, profile, noise=noise)
 
+    attach_structure(result, left_payload, right_payload, profile,
+                     skip=args.no_structure)
+
     store = AcceptStore.load(args.accept_file)
     if apply_accepted(result, store):
         console.print(
@@ -211,6 +239,8 @@ def cmd_compare(args) -> int:
             f"({store.path})", style="dim")
 
     render_summary(result, console)
+    if result.structure_report and not args.quiet:
+        render_structure(result.structure_report, console)
     if not args.quiet:
         if left_payload.kind is Kind.DATA:
             render_fields(result, console)
@@ -305,6 +335,8 @@ def cmd_accept(args) -> int:
                                     left_payload.data, right_payload.data)
     else:
         result = compare(left, right, profile)
+
+    attach_structure(result, left_payload, right_payload, profile)
 
     store = AcceptStore.load(args.accept_file)
     findings = fingerprints_of(result)

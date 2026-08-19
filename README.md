@@ -238,6 +238,40 @@ once suppresses it everywhere. The store lives at `.sitediff/accepted.toml`
 with an author and a date, not a click that disappears. `--dry-run` shows what
 would be recorded without writing.
 
+## Comparing elements, not only text
+
+Text extraction flattens a page into lines and discards the markup, so a search
+box that vanished, a table that lost a column, or an image that lost its alt
+text are all invisible to a content diff. Those are exactly the regressions a
+rewrite introduces, and they are what a person notices first.
+
+Every comparison of two HTML pages therefore also compares what the pages are
+**made of**, and reports it in plain language:
+
+```
+47 element(s) on legacy are absent from the rewrite.
+59 element(s) appear on the rewrite that are not on legacy.
+19 element type(s) appear a different number of times.
+
+Missing from the rewrite (47)
+  Button 'Download CSV' is on legacy but not on the rewrite.
+  Button 'Download PDF' is on legacy but not on the rewrite.
+  Radio button 'Trend' is on legacy but not on the rewrite.
+
+Different shape (3)
+  Table 'Indicators' is 12 rows x 6 columns on legacy but 12 rows x 5 columns
+  on the rewrite.
+```
+
+Inventoried: headings (with level), tables (with row and column counts), form
+controls named by their label, buttons, images (flagging missing alt text),
+landmarks, and lists. Anonymous containers are ignored, since a `<div>` nobody
+can name is not a finding.
+
+Structural findings count toward the verdict, so a page whose text matches
+exactly still reports drift if a control disappeared. They can be accepted like
+any other intentional difference. Pass `--no-structure` to compare text only.
+
 ## Noise cancellation
 
 Two captures of the *same* side will disagree wherever a page is

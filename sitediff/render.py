@@ -372,3 +372,31 @@ def render_run(report, console: Console, show: int = 25) -> None:
         console.print(f"\n  ... and {len(drifted) - show} more. "
                       f"Full results in {report.db_path}", style="dim")
     console.print()
+
+
+def render_structure(report, console: Console, limit: int = 12) -> None:
+    """Plain-language element findings, grouped by what happened."""
+    console.print()
+    for line in report.summary():
+        console.print(f"  {line}", style="meta.key")
+
+    if report.clean:
+        console.print()
+        return
+
+    groups = [
+        ("missing", f"Missing from {report.right_name}", "diff.remove"),
+        ("added", f"Only on {report.right_name}", "diff.add"),
+        ("changed", "Present on both, different shape", "status.drift"),
+        ("count", "Different number of occurrences", "meta.key"),
+    ]
+    for severity, title, style in groups:
+        items = report.of(severity)
+        if not items:
+            continue
+        console.print(f"\n  [bold]{title}[/]  [dim]({len(items)})[/]")
+        for finding in items[:limit]:
+            console.print(Text(f"    {finding.message}", style=style))
+        if len(items) > limit:
+            console.print(f"    [dim]... and {len(items) - limit} more[/]")
+    console.print()

@@ -79,6 +79,12 @@ class DiffResult:
     mode: Mode = Mode.VALUES
     meta_changes: list[MetaChange] = field(default_factory=list)
     field_changes: list[FieldChange] = field(default_factory=list)
+    # Structural findings, when both sides supplied markup. Text extraction
+    # discards the DOM, so a vanished search box or a table that lost a column
+    # is invisible to a content diff and has to be compared separately.
+    # Named to avoid confusion with `structured`, which means "this is a field
+    # comparison rather than a text one".
+    structure_report: object = None
     altered: int = 0
     accepted: int = 0
 
@@ -87,8 +93,14 @@ class DiffResult:
         return bool(self.field_changes) or self.altered > 0
 
     @property
+    def structural_findings(self) -> int:
+        return len(self.structure_report.findings) if self.structure_report else 0
+
+    @property
     def status(self) -> Status:
         if self.added or self.removed or self.altered or self.meta_changes:
+            return Status.DRIFT
+        if self.structural_findings:
             return Status.DRIFT
         return Status.CLEAN
 

@@ -38,6 +38,12 @@ def fingerprint_line(op: Op, text: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
+def fingerprint_structure(severity: str, kind: str, label: str,
+                          left: str, right: str) -> str:
+    raw = f"structure|{severity}|{kind}|{label}|{left}|{right}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def fingerprints_of(result: DiffResult) -> dict[str, str]:
     """Every finding in a result, as fingerprint -> human-readable description."""
     found: dict[str, str] = {}
@@ -55,6 +61,14 @@ def fingerprints_of(result: DiffResult) -> dict[str, str]:
                 found[fingerprint_line(line.op, line.text)] = (
                     f"{line.op.value} {line.text[:120]}"
                 )
+
+    # A structural change can be intentional too: a language selector that the
+    # rewrite drops on purpose should be reviewed once, not on every page.
+    if result.structure_report:
+        for finding in result.structure_report.findings:
+            key = fingerprint_structure(finding.severity, finding.kind,
+                                        finding.label, finding.left, finding.right)
+            found[key] = finding.message[:160]
     return found
 
 
@@ -165,6 +179,17 @@ def apply_accepted(result: DiffResult, store: AcceptStore) -> int:
         # A hunk left with only context lines has nothing left to report.
         result.hunks = [h for h in result.hunks
                         if any(ln.op is not Op.EQUAL for ln in h.lines)]
+
+    if result.structure_report:
+        kept_findings = []
+        for finding in result.structure_report.findings:
+            key = fingerprint_structure(finding.severity, finding.kind,
+                                        finding.label, finding.left, finding.right)
+            if key in store:
+                suppressed += 1
+            else:
+                kept_findings.append(finding)
+        result.structure_report.findings = kept_findings
 
     result.accepted = suppressed
     return suppressed

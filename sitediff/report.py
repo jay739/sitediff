@@ -83,6 +83,55 @@ def _shell(title: str, badge: str, subtitle: str, body: str) -> str:
 """
 
 
+SEVERITY_LABEL = {
+    "missing": ("Missing", "remove"),
+    "added": ("Only on the right", "add"),
+    "changed": ("Different shape", "alter"),
+    "count": ("Different count", "alter"),
+}
+
+
+def _structure(result: DiffResult) -> str:
+    """Plain-language element findings, ahead of any line-level diff.
+
+    This is what a person asks first: what is on one page and not the other.
+    The content diff answers a narrower question and comes after.
+    """
+    report = result.structure_report
+    if report is None:
+        return ""
+
+    summary = "".join(f"<li>{_esc(line)}</li>" for line in report.summary())
+    if report.clean:
+        return (f'<section class="findings"><h2>Structure</h2>'
+                f'<ul class="summary">{summary}</ul></section>')
+
+    groups = []
+    for severity in ("missing", "added", "changed", "count"):
+        items = report.of(severity)
+        if not items:
+            continue
+        label, css = SEVERITY_LABEL[severity]
+        title = label
+        if severity == "missing":
+            title = f"Missing from {report.right_name}"
+        elif severity == "added":
+            title = f"Only on {report.right_name}"
+        rows = "".join(
+            f'<li class="f-{css}" data-op="{severity}">{_esc(f.message)}</li>'
+            for f in items
+        )
+        groups.append(
+            f'<details class="hunk" open><summary><span class="chev">&rsaquo;</span>'
+            f"<span>{_esc(title)}</span>"
+            f'<span class="tally">{len(items)}</span></summary>'
+            f'<ul class="findings-list">{rows}</ul></details>'
+        )
+
+    return (f'<section class="findings"><h2>Structure</h2>'
+            f'<ul class="summary">{summary}</ul>{"".join(groups)}</section>')
+
+
 def _views(result: DiffResult) -> str:
     """Both layouts are emitted; the toggle swaps which one is shown.
 
@@ -237,6 +286,8 @@ def build_html_report(result: DiffResult, profile: Profile) -> str:
     ]
     if result.structured:
         tiles.append(_tile("altered", f"~{result.altered}", "alt"))
+    if result.structure_report is not None:
+        tiles.append(_tile("element findings", str(result.structural_findings), "alt"))
     tiles.append(_ring_tile("similarity", result.similarity))
 
     kinds = [("all", "All"), ("add", "Added"), ("remove", "Removed")]
@@ -246,8 +297,10 @@ def build_html_report(result: DiffResult, profile: Profile) -> str:
     body = (
         f'<div class="tiles">{"".join(tiles)}</div>'
         f"{_meta(result)}"
+        f"{_structure(result)}"
+        f'<section class="findings"><h2>Content</h2>'
         f"{_toolbar(kinds, result.changed, views=not result.structured)}"
-        f"{_views(result)}"
+        f"{_views(result)}</section>"
     )
     subtitle = f"profile: {profile.name} · {Path(result.left.path).name} vs " \
                f"{Path(result.right.path).name}"
