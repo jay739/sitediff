@@ -97,11 +97,15 @@ def test_connect_to_override_needs_its_own_authorisation(server):
 
 
 def test_suffix_match_does_not_allow_lookalike_domains():
-    p = EgressPolicy([".jay739.dev"])
+    """A leading dot matches subdomains and the apex, never a lookalike that
+    merely starts with the allowed name."""
+    p = EgressPolicy([".example.com"])
     assert p.permits("app.example.com")
-    assert p.permits("jay739.dev")
-    assert not p.permits("jay739.dev.evil.net")
-    assert not p.permits("notjay739.dev")
+    assert p.permits("deep.nested.example.com")
+    assert p.permits("example.com")
+    assert not p.permits("example.com.attacker.net")
+    assert not p.permits("notexample.com")
+    assert not p.permits("example.com.evil")
 
 
 # --- fetching and metadata ---------------------------------------------------
