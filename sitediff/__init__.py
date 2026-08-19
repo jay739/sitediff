@@ -13,6 +13,14 @@ from .extract import Page, extract
 __version__ = "0.1.0"
 
 __all__ = [
-    "Profile", "load_profile", "DiffResult", "Status", "compare",
-    "noise_baseline", "SiteDiffError", "Page", "extract", "__version__",
+    "DiffResult",
+    "Page",
+    "Profile",
+    "SiteDiffError",
+    "Status",
+    "__version__",
+    "compare",
+    "extract",
+    "load_profile",
+    "noise_baseline",
 ]

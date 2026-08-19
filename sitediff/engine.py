@@ -9,19 +9,19 @@ from __future__ import annotations
 import difflib
 import re
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 from .config import Mode, Profile
 from .extract import Page
 
 
-class Op(str, Enum):
+class Op(StrEnum):
     EQUAL = "equal"
     ADD = "add"
     REMOVE = "remove"
 
 
-class Status(str, Enum):
+class Status(StrEnum):
     CLEAN = "clean"
     DRIFT = "drift"
 
@@ -42,11 +42,11 @@ class Hunk:
 
     @property
     def left_len(self) -> int:
-        return sum(1 for l in self.lines if l.op in (Op.EQUAL, Op.REMOVE))
+        return sum(1 for ln in self.lines if ln.op in (Op.EQUAL, Op.REMOVE))
 
     @property
     def right_len(self) -> int:
-        return sum(1 for l in self.lines if l.op in (Op.EQUAL, Op.ADD))
+        return sum(1 for ln in self.lines if ln.op in (Op.EQUAL, Op.ADD))
 
     @property
     def header(self) -> str:
@@ -114,7 +114,7 @@ def _filter(lines: list[str], profile: Profile) -> tuple[list[str], int]:
     """Drop lines the profile marks as never worth reporting."""
     if not profile.ignore_patterns:
         return list(lines), 0
-    kept = [l for l in lines if not any(p.search(l) for p in profile.ignore_patterns)]
+    kept = [ln for ln in lines if not any(p.search(ln) for p in profile.ignore_patterns)]
     return kept, len(lines) - len(kept)
 
 
@@ -171,7 +171,7 @@ def _template(a: str, b: str) -> re.Pattern | None:
     matcher = difflib.SequenceMatcher(None, ta, tb, autojunk=False)
     parts: list[str] = []
     literal = 0
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():  # noqa: B007
         if tag == "equal":
             source, count = _widen("".join(ta[i1:i2]))
             parts.append(source)
@@ -232,7 +232,7 @@ def noise_baseline(first: Page, second: Page) -> NoiseModel:
         # run lengths mean content was added or removed, not merely changed.
         if len(left) != len(right):
             continue
-        for a, b in zip(left, right):
+        for a, b in zip(left, right, strict=True):
             key = f"{a}\x00{b}"
             if key in seen:
                 continue
@@ -247,7 +247,7 @@ def compare(
     left: Page,
     right: Page,
     profile: Profile,
-    noise: "NoiseModel | None" = None,
+    noise: NoiseModel | None = None,
 ) -> DiffResult:
     """Diff two extracted pages into hunks, applying ignore and noise rules."""
     left_lines, ignored_l = _filter(left.lines, profile)
@@ -256,13 +256,13 @@ def compare(
     suppressed = 0
     if noise:
         before = len(left_lines) + len(right_lines)
-        left_lines = [l for l in left_lines if not noise.matches(l)]
-        right_lines = [l for l in right_lines if not noise.matches(l)]
+        left_lines = [ln for ln in left_lines if not noise.matches(ln)]
+        right_lines = [ln for ln in right_lines if not noise.matches(ln)]
         suppressed = before - (len(left_lines) + len(right_lines))
 
     if profile.mode is Mode.SHAPE:
-        left_lines = [shape_of(l) for l in left_lines]
-        right_lines = [shape_of(l) for l in right_lines]
+        left_lines = [shape_of(ln) for ln in left_lines]
+        right_lines = [shape_of(ln) for ln in right_lines]
 
     matcher = difflib.SequenceMatcher(None, left_lines, right_lines, autojunk=False)
     result = DiffResult(

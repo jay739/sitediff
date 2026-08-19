@@ -9,8 +9,12 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from sitediff.config import Profile, load_profile
-from sitediff.engine import NoiseModel, Status, compare, noise_baseline
-from sitediff.errors import PageNotFoundError, PageNotRenderedError, ProfileNotFoundError
+from sitediff.engine import Status, compare, noise_baseline
+from sitediff.errors import (
+    PageNotFoundError,
+    PageNotRenderedError,
+    ProfileNotFoundError,
+)
 from sitediff.extract import Page, extract
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
@@ -36,7 +40,10 @@ def test_nested_hidden_elements_do_not_crash(tmp_path):
 
 
 def test_deeply_nested_hidden_chain(tmp_path):
-    html = "<html><body><div hidden><div hidden><div hidden><p>x</p></div></div></div><p>ok</p></body></html>"
+    html = (
+        "<html><body><div hidden><div hidden><div hidden><p>x</p></div></div></div>"
+        "<p>ok</p></body></html>"
+    )
     assert lines_of(tmp_path, html) == ["ok"]
 
 
@@ -155,7 +162,7 @@ def test_missing_value_is_reported(tmp_path):
     right = extract(FIXTURES / "optimised.html", Profile(), "right")
     result = compare(left, right, Profile())
     assert result.status is Status.DRIFT
-    removed = [l.text for h in result.hunks for l in h.lines if l.op.value == "remove"]
+    removed = [ln.text for h in result.hunks for ln in h.lines if ln.op.value == "remove"]
     assert "45.2%" in removed
 
 

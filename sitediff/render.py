@@ -98,9 +98,9 @@ def _pair_runs(hunk: Hunk) -> dict[int, int]:
 
 
 def _gutter(left_no: int | None, right_no: int | None, width: int) -> Text:
-    l = str(left_no) if left_no else ""
-    r = str(right_no) if right_no else ""
-    return Text(f"{l:>{width}} {r:>{width}} ", style="diff.gutter")
+    left = str(left_no) if left_no else ""
+    right = str(right_no) if right_no else ""
+    return Text(f"{left:>{width}} {right:>{width}} ", style="diff.gutter")
 
 
 def render_summary(result: DiffResult, console: Console) -> None:

@@ -5,6 +5,7 @@ import re
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import ClassVar
 
 import pytest
 
@@ -20,7 +21,7 @@ PAGE = "<html><body><main><p>Value {v}</p></main></body></html>"
 
 
 class Handler(BaseHTTPRequestHandler):
-    pages: dict = {}
+    pages: ClassVar[dict] = {}
 
     def do_GET(self):
         if self.path.startswith("/redirect"):

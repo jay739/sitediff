@@ -9,15 +9,15 @@ from __future__ import annotations
 import re
 import tomllib
 from dataclasses import dataclass, field, replace
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-
 from urllib.parse import urlparse
 
 from .errors import InvalidProfileError, ProfileNotFoundError, SourceNotFoundError
 from .source import DEFAULT_MAX_REDIRECTS, DEFAULT_TIMEOUT, EgressPolicy, Source
 
-BUILTIN_PROFILE_DIR = Path(__file__).resolve().parent.parent / "profiles"
+# Inside the package so the bundled profiles ship with the wheel.
+BUILTIN_PROFILE_DIR = Path(__file__).resolve().parent / "profiles"
 
 DEFAULT_NOISE_TAGS = [
     "script", "style", "noscript", "template", "svg", "path", "iframe",
@@ -54,7 +54,7 @@ class Rule:
         return self.pattern.sub(self.replacement, line)
 
 
-class Mode(str, Enum):
+class Mode(StrEnum):
     """What counts as a difference.
 
     VALUES  Both sides read the same data, so any disagreement is a defect.
@@ -126,7 +126,7 @@ class Profile:
             text = rule.apply(text)
         return text
 
-    def with_overrides(self, **kwargs) -> "Profile":
+    def with_overrides(self, **kwargs) -> Profile:
         """Return a copy with non-None overrides applied (used by the CLI)."""
         clean = {k: v for k, v in kwargs.items() if v is not None}
         return replace(self, **clean) if clean else self
@@ -269,8 +269,11 @@ def load_profile(source: str | Path | None) -> Profile:
         render_sentinels=_require_list_of_str(
             extract.get("render_sentinels", []), path, "extract.render_sentinels"),
         ignore_patterns=_compile(
-            _require_list_of_str(compare.get("ignore_patterns", []), path, "compare.ignore_patterns"),
-            path, "compare.ignore_patterns"),
+            _require_list_of_str(
+                compare.get("ignore_patterns", []), path, "compare.ignore_patterns",
+            ),
+            path, "compare.ignore_patterns",
+        ),
         normalize=rules,
         context_lines=compare.get("context_lines", defaults.context_lines),
         mode=mode,
@@ -279,7 +282,8 @@ def load_profile(source: str | Path | None) -> Profile:
             data.get("security", {}).get("allow_hosts", []), path, "security.allow_hosts"),
         redact=parse_rules("redact"),
         compare_headers=_require_list_of_str(
-            compare.get("headers", []), path, "compare.headers"),
+            compare.get("headers", []), path, "compare.headers",
+        ),
     )
 
 

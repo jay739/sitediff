@@ -11,15 +11,14 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from pathlib import Path
+
+from rich.text import Text
 
 from . import __version__
 from .config import Profile, list_builtin_profiles, load_profile
 from .engine import Status, compare, noise_baseline
 from .errors import SiteDiffError
 from .extract import Page, extract, extract_html
-from rich.text import Text
-
 from .render import make_console, render_side_by_side, render_summary, render_unified
 from .source import Source, fetch
 

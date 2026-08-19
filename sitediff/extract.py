@@ -209,7 +209,7 @@ def extract_html(
     if profile.redact:
         lines = [profile.apply_redaction(line) for line in lines]
 
-    lines = [ln for ln in (l.strip() for l in lines) if ln]
+    lines = [ln for ln in (raw_line.strip() for raw_line in lines) if ln]
 
     if not lines:
         raise EmptyExtractionError(path, side)

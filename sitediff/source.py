@@ -245,7 +245,7 @@ def _single_request(url: str, source: Source, policy: EgressPolicy, via: str):
             f"Set verify_tls = false on the source only if this endpoint is "
             f"expected to present an untrusted certificate.",
         ) from exc
-    except socket.timeout as exc:
+    except TimeoutError as exc:
         raise FetchError(url, f"timed out after {source.timeout}s") from exc
     except (socket.gaierror, ConnectionError, OSError, http.client.HTTPException) as exc:
         raise FetchError(url, str(exc) or type(exc).__name__) from exc
