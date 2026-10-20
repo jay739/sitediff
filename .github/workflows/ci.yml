@@ -11,7 +11,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Docs-only changes (Markdown, LICENSE, issue and discussion templates,
+  # images and pages under docs/) skip the jobs below. They are skipped with a
+  # job-level `if`, not paths-ignore, so required checks still pass.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          # No usable base (manual run, new branch, rewritten history): build.
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$base" HEAD)
+          echo "Changed files:"
+          echo "$changed"
+          docs='^(.*\.md|LICENSE.*|\.github/(ISSUE_TEMPLATE|DISCUSSION_TEMPLATE)/.*|docs/.*\.(svg|png|jpe?g|gif|webp|ico|html|css))$'
+          keep='^(README\.md|LICENSE|docs/.*\.md)$'
+          code_files=$( { echo "$changed" | grep -vE "$docs"; [ -n "$keep" ] && echo "$changed" | grep -E "$keep"; } | grep -c . || true)
+          if [ "$code_files" -gt 0 ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Docs-only change: skipping the build and test jobs."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     # The matrix is not decoration: this tool claims to run anywhere, and the
     # parts most likely to break per platform (console colour, code page
     # fallback, socket behaviour) are only exercised by running there.
@@ -44,6 +84,8 @@ jobs:
         run: python -c "import pathlib,sitediff.config as c; [c.load_profile(str(p)) for p in (pathlib.Path(c.__file__).parent/'profiles').glob('*.toml')]"
 
   audit:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Dependency vulnerabilities
     runs-on: ubuntu-latest
     steps:
@@ -60,6 +102,8 @@ jobs:
           pip-audit --progress-spinner off --skip-editable
 
   package:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     # A wheel that builds is not the same as a wheel that works. This installs
     # it clean and runs the console script, which is how the missing-profiles
     # packaging bug was caught in the first place.
