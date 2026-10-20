@@ -1,5 +1,9 @@
 # sitediff
 
+<p align="center">
+  <img src="docs/logo.svg" alt="sitediff logo" width="128" />
+</p>
+
 Compare what two renderings of the same page actually say, when the two sides
 are produced by different codebases and cannot be compared byte for byte.
 
