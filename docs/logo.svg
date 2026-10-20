@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect x="0" y="0" width="512" height="512" rx="123" ry="123" fill="#0B0D10"/>
+  <g id="icon">
+    <!-- two renderings of the same page, side by side -->
+    <rect x="92" y="120" width="144" height="272" rx="28" fill="#2DD4BF"/>
+    <rect x="276" y="120" width="144" height="272" rx="28" fill="#2DD4BF"/>
+    <!-- matching lines of content -->
+    <rect x="120" y="166" width="88" height="30" rx="15" fill="#0B0D10"/>
+    <rect x="120" y="241" width="88" height="30" rx="15" fill="#0B0D10"/>
+    <rect x="120" y="316" width="88" height="30" rx="15" fill="#0B0D10"/>
+    <rect x="304" y="166" width="88" height="30" rx="15" fill="#0B0D10"/>
+    <rect x="304" y="316" width="88" height="30" rx="15" fill="#0B0D10"/>
+    <!-- the one line that differs, flagged -->
+    <rect x="304" y="241" width="40" height="30" rx="15" fill="#0B0D10"/>
+    <rect x="356" y="241" width="36" height="30" rx="15" fill="#F2F0EA"/>
+  </g>
+</svg>
